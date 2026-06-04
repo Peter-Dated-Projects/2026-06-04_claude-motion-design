@@ -1,0 +1,89 @@
+/* CodePanel: header (title + copy) stacked over the Monaco editor body.
+   The base .panel is a flex row; the code panel stacks vertically. */
+.panel--code {
+  flex-direction: column;
+}
+
+.codepanel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  background: #202020;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.codepanel__title {
+  color: #9aa0a6;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.02em;
+}
+
+.codepanel__copy {
+  appearance: none;
+  border: 1px solid #3a3a3a;
+  background: #2a2a2a;
+  color: #ddd;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.codepanel__copy:hover {
+  background: #333;
+  border-color: #4a4a4a;
+}
+
+.codepanel__copy:active {
+  background: #262626;
+}
+
+/* The editor fills the remaining space; overlay is positioned against it. */
+.codepanel__body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.monaco-host {
+  width: 100%;
+  height: 100%;
+}
+
+.monaco-host__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: #777;
+  font-size: 13px;
+}
+
+/* Brief highlight when code is replaced from outside (generated animation). */
+.monaco-host--flash {
+  animation: codepanel-flash 0.5s ease-out;
+}
+
+@keyframes codepanel-flash {
+  0% {
+    box-shadow: inset 0 0 0 9999px rgba(250, 204, 21, 0.22);
+  }
+  100% {
+    box-shadow: inset 0 0 0 9999px rgba(250, 204, 21, 0);
+  }
+}
+
+/* Read-only veil while a generation is streaming. pointer-events:none keeps it
+   purely visual; the editor's own readOnly option blocks input. */
+.codepanel__overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: rgba(15, 23, 42, 0.35);
+  z-index: 2;
+}
