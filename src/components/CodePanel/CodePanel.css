@@ -25,6 +25,9 @@
 }
 
 .filetree__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 6px 10px;
   color: #888;
   font-size: 10px;
@@ -34,6 +37,25 @@
   position: sticky;
   top: 0;
   background: #f7f7f7;
+}
+
+/* Collapse arrow seated on the right of the FILES header. When the rail is
+   hidden this button is gone with it; the codetabs row shows a `>>` to bring
+   it back. */
+.filetree__collapse {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #888;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+
+.filetree__collapse:hover {
+  color: #333;
 }
 
 .filetree__empty {

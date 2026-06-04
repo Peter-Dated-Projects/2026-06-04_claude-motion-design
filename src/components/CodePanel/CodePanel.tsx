@@ -208,7 +208,18 @@ function CodePanel({
       <div className="codepanel__layout">
         {showFileTree && (
           <aside className="filetree" aria-label="Project files">
-            <div className="filetree__header">Files</div>
+            <div className="filetree__header">
+              <span>Files</span>
+              <button
+                type="button"
+                className="filetree__collapse"
+                onClick={toggleFileTree}
+                aria-label="Hide file tree"
+                title="Hide file tree"
+              >
+                {"<<"}
+              </button>
+            </div>
             {tree.length === 0 ? (
               <div className="filetree__empty">No files</div>
             ) : (
@@ -226,16 +237,18 @@ function CodePanel({
 
         <div className="codepanel__main">
           <div className="codetabs" role="tablist">
-            <button
-              type="button"
-              className="codepanel__tree-toggle"
-              onClick={toggleFileTree}
-              aria-label={showFileTree ? "Hide file tree" : "Show file tree"}
-              aria-pressed={showFileTree}
-              title={showFileTree ? "Hide file tree" : "Show file tree"}
-            >
-              {showFileTree ? "<<" : ">>"}
-            </button>
+            {!showFileTree && (
+              <button
+                type="button"
+                className="codepanel__tree-toggle"
+                onClick={toggleFileTree}
+                aria-label="Show file tree"
+                aria-pressed={false}
+                title="Show file tree"
+              >
+                {">>"}
+              </button>
+            )}
             <div className="codetabs__scroll">
               {openFiles.map((path) => {
                 const isActive = path === activeFile;
