@@ -6,10 +6,53 @@ import sandboxFrameHtml from "../../assets/sandbox-frame.html?raw";
 import reactRuntime from "../../../src-tauri/resources/react.production.min.js?raw";
 import reactDomRuntime from "../../../src-tauri/resources/react-dom.production.min.js?raw";
 import previewRuntime from "../../../src-tauri/resources/preview-runtime.js?raw";
+import PhoneBezel, {
+  BEZEL_OUTER_WIDTH,
+  BEZEL_OUTER_HEIGHT,
+} from "./PhoneBezel";
+import SafeZoneOverlay from "./SafeZoneOverlay";
+import {
+  useUIStore,
+  type SafeZonePlatform,
+} from "../../store/uiStore";
 
-// Composition is 9:16 (1080x1920); the preview box is scaled to fit its container.
-const COMPOSITION_WIDTH = 1080;
-const COMPOSITION_HEIGHT = 1920;
+const PLATFORM_OPTIONS: { value: SafeZonePlatform; label: string }[] = [
+  { value: "universal", label: "Universal" },
+  { value: "tiktok", label: "TikTok" },
+  { value: "instagram", label: "Instagram" },
+  { value: "youtube", label: "YouTube" },
+];
+
+const TOOLBAR_STYLE: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "6px 8px",
+  borderBottom: "1px solid #2a2a2a",
+  flex: "0 0 auto",
+};
+
+const SELECT_STYLE: React.CSSProperties = {
+  background: "#1d1d1d",
+  color: "#ddd",
+  border: "1px solid #333",
+  borderRadius: 4,
+  padding: "3px 6px",
+  fontSize: 12,
+  fontFamily: "sans-serif",
+};
+
+const TOGGLE_STYLE: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  border: "1px solid #333",
+  borderRadius: 4,
+  padding: "3px 8px",
+  fontSize: 12,
+  fontFamily: "sans-serif",
+  cursor: "pointer",
+};
 
 // Stand-in animation so the preview is demonstrable before Monaco (T-025) / Claude
 // codegen (T-024) are wired in during integration (T-032).
@@ -61,7 +104,13 @@ function PreviewPanel() {
   const [code] = useState(SAMPLE_CODE);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [scaleStyle, setScaleStyle] = useState<React.CSSProperties>({});
+  // Fit transform for the bezel stage: how much to scale the 1080x1920 + bezel chrome
+  // down to the container, and the centering offset. `scale` is also handed to the
+  // safe-zone overlay so its strokes/labels stay crisp inside the scaled space.
+  const [fit, setFit] = useState({ scale: 1, offsetX: 0, offsetY: 0 });
+
+  const { showSafeZone, safeZonePlatform, toggleSafeZone, setSafeZonePlatform } =
+    useUIStore();
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -140,7 +189,7 @@ function PreviewPanel() {
     workerRef.current?.postMessage({ type: "compile", code });
   }, [code]);
 
-  // --- Fit the 1080x1920 box into the container, preserving aspect ------------------
+  // --- Fit the bezel (screen + chrome) into the container, preserving aspect --------
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -148,15 +197,13 @@ function PreviewPanel() {
     const update = () => {
       const { width, height } = container.getBoundingClientRect();
       if (width === 0 || height === 0) return;
-      const scale = Math.min(width / COMPOSITION_WIDTH, height / COMPOSITION_HEIGHT);
-      const offsetX = (width - COMPOSITION_WIDTH * scale) / 2;
-      const offsetY = (height - COMPOSITION_HEIGHT * scale) / 2;
-      setScaleStyle({
-        width: COMPOSITION_WIDTH,
-        height: COMPOSITION_HEIGHT,
-        transformOrigin: "top left",
-        transform: `translate(${offsetX}px, ${offsetY}px) scale(${scale})`,
-      });
+      const scale = Math.min(
+        width / BEZEL_OUTER_WIDTH,
+        height / BEZEL_OUTER_HEIGHT,
+      );
+      const offsetX = (width - BEZEL_OUTER_WIDTH * scale) / 2;
+      const offsetY = (height - BEZEL_OUTER_HEIGHT * scale) / 2;
+      setFit({ scale, offsetX, offsetY });
     };
 
     const observer = new ResizeObserver(update);
@@ -166,7 +213,42 @@ function PreviewPanel() {
   }, []);
 
   return (
-    <section className="panel panel--preview">
+    <section
+      className="panel panel--preview"
+      style={{ flexDirection: "column" }}
+    >
+      <div style={TOOLBAR_STYLE}>
+        <select
+          aria-label="Safe zone platform"
+          style={SELECT_STYLE}
+          value={safeZonePlatform}
+          onChange={(e) =>
+            setSafeZonePlatform(e.target.value as SafeZonePlatform)
+          }
+        >
+          {PLATFORM_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          style={{
+            ...TOGGLE_STYLE,
+            color: showSafeZone ? "#ffd24a" : "#9aa",
+            borderColor: showSafeZone ? "#5a4a16" : "#333",
+            background: showSafeZone ? "#2a2410" : "#1d1d1d",
+          }}
+          aria-pressed={showSafeZone}
+          onClick={toggleSafeZone}
+          title="Toggle safe-zone overlay"
+        >
+          <span aria-hidden>{showSafeZone ? "(o)" : "(-)"}</span>
+          Safe Zone
+        </button>
+      </div>
+
       <div
         ref={containerRef}
         style={{
@@ -177,22 +259,40 @@ function PreviewPanel() {
           background: "#000",
         }}
       >
-        <iframe
-          ref={iframeRef}
-          title="Remotion preview sandbox"
-          // allow-scripts WITHOUT allow-same-origin: the sandbox runs on an opaque origin,
-          // isolated from the app. Compiled code cannot touch the host window or network.
-          sandbox="allow-scripts"
-          srcDoc={srcDoc}
+        <div
           style={{
             position: "absolute",
             top: 0,
             left: 0,
-            border: "none",
-            background: "#000",
-            ...scaleStyle,
+            transformOrigin: "top left",
+            transform: `translate(${fit.offsetX}px, ${fit.offsetY}px) scale(${fit.scale})`,
           }}
-        />
+        >
+          <PhoneBezel>
+            <iframe
+              ref={iframeRef}
+              title="Remotion preview sandbox"
+              // allow-scripts WITHOUT allow-same-origin: the sandbox runs on an opaque
+              // origin, isolated from the app. Compiled code cannot touch the host
+              // window or network.
+              sandbox="allow-scripts"
+              srcDoc={srcDoc}
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                border: "none",
+                background: "#000",
+              }}
+            />
+            <SafeZoneOverlay
+              show={showSafeZone}
+              platform={safeZonePlatform}
+              scale={fit.scale}
+            />
+          </PhoneBezel>
+        </div>
 
         {isLoading && !error && (
           <div
