@@ -48,6 +48,8 @@ pub fn run() {
             commands::projects::list_project_files,
             commands::projects::read_file,
             commands::projects::write_file,
+            commands::projects::list_assets,
+            commands::projects::add_asset,
             commands::projects::save_conversation,
             commands::projects::load_conversation,
             commands::projects::reveal_project,
