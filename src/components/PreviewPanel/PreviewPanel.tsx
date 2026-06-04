@@ -54,6 +54,29 @@ const TOGGLE_STYLE: React.CSSProperties = {
   cursor: "pointer",
 };
 
+// Eye / eye-off glyph for the Safe Zone toggle. Inline SVG (currentColor) rather than an
+// emoji or icon-font dependency. `open` draws the eye; otherwise a slash crosses it out.
+function EyeIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      focusable={false}
+    >
+      <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
+      <circle cx={12} cy={12} r={3} />
+      {!open && <line x1={3} y1={3} x2={21} y2={21} />}
+    </svg>
+  );
+}
+
 // Stand-in animation so the preview is demonstrable before Monaco (T-025) / Claude
 // codegen (T-024) are wired in during integration (T-032).
 const SAMPLE_CODE = `import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, spring } from 'remotion';
@@ -104,6 +127,10 @@ function PreviewPanel() {
   const [code] = useState(SAMPLE_CODE);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  // Mirrors the sandbox's playback state, read passively from `frameUpdate` events.
+  // Drives "auto-off on play": the safe-zone overlay hides while the animation runs.
+  // ReplayControls (T-030) owns the actual playback commands; we only listen.
+  const [isPlaying, setIsPlaying] = useState(false);
   // Fit transform for the bezel stage: how much to scale the 1080x1920 + bezel chrome
   // down to the container, and the centering offset. `scale` is also handed to the
   // safe-zone overlay so its strokes/labels stay crisp inside the scaled space.
@@ -175,8 +202,11 @@ function PreviewPanel() {
       } else if (data.type === "renderError") {
         setError(data.message);
         setIsLoading(false);
+      } else if (data.type === "frameUpdate") {
+        // Read-only: track playback state so the safe-zone overlay auto-hides during
+        // play. Replay COMMANDS belong to ReplayControls; we never post from here.
+        setIsPlaying(data.isPlaying);
       }
-      // frameUpdate is consumed by the replay controls (T-030) once wired.
     };
 
     window.addEventListener("message", onMessage);
@@ -244,7 +274,7 @@ function PreviewPanel() {
           onClick={toggleSafeZone}
           title="Toggle safe-zone overlay"
         >
-          <span aria-hidden>{showSafeZone ? "(o)" : "(-)"}</span>
+          <EyeIcon open={showSafeZone} />
           Safe Zone
         </button>
       </div>
@@ -287,7 +317,7 @@ function PreviewPanel() {
               }}
             />
             <SafeZoneOverlay
-              show={showSafeZone}
+              show={showSafeZone && !isPlaying}
               platform={safeZonePlatform}
               scale={fit.scale}
             />
