@@ -47,6 +47,7 @@ pub fn run() {
             commands::projects::load_animation,
             commands::projects::save_conversation,
             commands::projects::load_conversation,
+            commands::projects::reveal_project,
             commands::claude::check_claude_installed,
             commands::claude::get_claude_cli,
             commands::claude::set_claude_cli,

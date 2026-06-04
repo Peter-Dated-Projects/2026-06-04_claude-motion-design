@@ -60,14 +60,17 @@ pub fn claude_config_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(base.join("claude-config"))
 }
 
-/// `{appDataDir}/projects/{slug}` — the working directory a Claude run executes in.
-/// Mirrors the project layout owned by T-021 (Local Project Storage).
+/// `{documentDir}/ClaudeMotion/projects/{slug}` — the working directory a Claude
+/// run executes in (PTY cwd) and the folder the animation.tsx watcher observes.
+/// MUST match `commands/projects.rs::projects_root()`, the project store: if these
+/// diverge, the terminal and watcher operate on a different folder than the one
+/// projects are created/read in.
 pub fn project_dir(app: &AppHandle, slug: &str) -> Result<PathBuf, String> {
     let base = app
         .path()
-        .app_data_dir()
-        .map_err(|e| format!("failed to resolve app data dir: {e}"))?;
-    Ok(base.join("projects").join(slug))
+        .document_dir()
+        .map_err(|e| format!("failed to resolve document dir: {e}"))?;
+    Ok(base.join("ClaudeMotion").join("projects").join(slug))
 }
 
 /// Copy the embedded MCP config and skills file into `{appDataDir}/claude-config/`

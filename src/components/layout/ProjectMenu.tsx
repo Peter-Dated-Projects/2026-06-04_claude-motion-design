@@ -65,6 +65,18 @@ function ProjectMenu() {
     }
   };
 
+  const handleReveal = async () => {
+    setOpen(false);
+    if (busy) return;
+    // slug omitted falls back to the projects root, so this works even with no
+    // project open.
+    try {
+      await invoke('reveal_project', { slug: activeProject?.slug ?? null });
+    } catch (err) {
+      setToast({ kind: 'error', text: `Reveal failed: ${String(err)}` });
+    }
+  };
+
   const handleImport = async () => {
     setOpen(false);
     if (busy) return;
@@ -120,6 +132,15 @@ function ProjectMenu() {
             onClick={handleImport}
           >
             Import ZIP
+          </button>
+          <button
+            className="project-menu__item"
+            type="button"
+            role="menuitem"
+            disabled={busy}
+            onClick={handleReveal}
+          >
+            Reveal in Finder
           </button>
         </div>
       )}

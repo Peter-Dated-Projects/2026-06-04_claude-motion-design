@@ -1,6 +1,11 @@
 // Local project storage: project CRUD backed by the local filesystem.
-// No database -- each project is a folder under {appDataDir}/projects/{slug}/
-// containing project.json, animation.tsx, conversation.json, and assets/.
+// No database -- each project is a folder under
+// {documentDir}/ClaudeMotion/projects/{slug}/ containing project.json,
+// animation.tsx, conversation.json, and assets/. Projects live in the user's
+// Documents folder (not the hidden app_data_dir) because they are user-owned
+// React source the user wants to open and edit; only the Claude config stays
+// in app_data_dir. The same root is resolved in claude_bridge.rs::project_dir()
+// (PTY cwd + animation.tsx watcher) and MUST stay in agreement.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -115,12 +120,16 @@ pub struct Message {
 
 // --- path helpers -----------------------------------------------------------
 
-/// {appDataDir}/projects, created if missing.
+/// {documentDir}/ClaudeMotion/projects, created if missing. Resolved via Tauri's
+/// `document_dir()` so projects land in the user's visible Documents folder.
+/// Must match `claude_bridge.rs::project_dir()`, which feeds the PTY cwd and the
+/// animation.tsx watcher.
 fn projects_root(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
-        .app_data_dir()
-        .map_err(|e| format!("failed to resolve app data dir: {e}"))?
+        .document_dir()
+        .map_err(|e| format!("failed to resolve document dir: {e}"))?
+        .join("ClaudeMotion")
         .join("projects");
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create projects dir: {e}"))?;
     Ok(dir)
@@ -294,6 +303,25 @@ pub fn load_conversation(app: AppHandle, slug: String) -> Result<Vec<Message>, S
     let raw = fs::read_to_string(&path)
         .map_err(|e| format!("failed to read conversation.json: {e}"))?;
     serde_json::from_str(&raw).map_err(|e| format!("failed to parse conversation.json: {e}"))
+}
+
+/// Reveal a project folder in Finder (macOS). With a `slug`, opens that
+/// project's folder; without one (or if it no longer exists), falls back to the
+/// projects root so there is always something to show. Spawns `open` directly
+/// via std::process -- no shell-plugin capability needed, same rationale as the
+/// Claude PTY bridge.
+#[tauri::command]
+pub fn reveal_project(app: AppHandle, slug: Option<String>) -> Result<(), String> {
+    let root = projects_root(&app)?;
+    let target = match slug {
+        Some(s) if root.join(&s).is_dir() => root.join(&s),
+        _ => root,
+    };
+    std::process::Command::new("open")
+        .arg(&target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("failed to reveal {}: {e}", target.display()))
 }
 
 /// Bump updated_at on project.json after a mutating write.
