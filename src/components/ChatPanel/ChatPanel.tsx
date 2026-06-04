@@ -1,20 +1,34 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useClaude } from "../../hooks/useClaude";
 import MessageBubble from "./MessageBubble";
+import type { Message } from "../../types";
 import "./ChatPanel.css";
 
+// Presentational chat panel. The Claude conversation (useClaude) is owned by the
+// parent (App) so the integration layer can drive the full loop -- generated code,
+// auto-save, error toasts, the Escape-to-cancel shortcut -- from one place. This
+// component just renders the transcript and the composer.
 interface ChatPanelProps {
-  /**
-   * Routed to the editor by the parent (integration wiring) when Claude
-   * produces a new animation, mirroring how CodePanel receives its `code`.
-   */
-  onCodeGenerated?: (code: string) => void;
+  messages: Message[];
+  /** Live assistant text accumulating during a run (before it is finalized). */
+  streamingText: string;
+  isGenerating: boolean;
+  /** True between send and the first streamed token. */
+  isWaiting: boolean;
+  onSend: (text: string) => void;
+  onCancel: () => void;
+  /** Disabled (with a hint) when there is no open project to chat against. */
+  disabled?: boolean;
 }
 
-function ChatPanel({ onCodeGenerated }: ChatPanelProps) {
-  const { messages, streamingText, isGenerating, isWaiting, error, send, cancel } =
-    useClaude({ onCodeGenerated });
-
+function ChatPanel({
+  messages,
+  streamingText,
+  isGenerating,
+  isWaiting,
+  onSend,
+  onCancel,
+  disabled = false,
+}: ChatPanelProps) {
   const [input, setInput] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -36,19 +50,30 @@ function ChatPanel({ onCodeGenerated }: ChatPanelProps) {
   }, [input]);
 
   const submit = () => {
-    if (isGenerating) return;
+    if (isGenerating || disabled) return;
     const text = input.trim();
     if (!text) return;
     setInput("");
-    void send(text);
+    onSend(text);
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // Enter or Cmd/Ctrl+Enter sends; Shift+Enter inserts a newline.
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
       e.preventDefault();
       submit();
+      return;
+    }
+    // Escape cancels an in-flight generation.
+    if (e.key === "Escape" && isGenerating) {
+      e.preventDefault();
+      onCancel();
     }
   };
+
+  const placeholder = disabled
+    ? "Open or create a project to start..."
+    : "Describe an animation...";
 
   return (
     <section className="panel panel--chat chatpanel">
@@ -80,24 +105,22 @@ function ChatPanel({ onCodeGenerated }: ChatPanelProps) {
         )}
       </div>
 
-      {error && <div className="chatpanel__error">{error}</div>}
-
       <div className="chatpanel__composer">
         <textarea
           ref={textareaRef}
           className="chatpanel__input"
-          placeholder="Describe an animation..."
+          placeholder={placeholder}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
-          disabled={isGenerating}
+          disabled={isGenerating || disabled}
           rows={1}
         />
         {isGenerating ? (
           <button
             type="button"
             className="chatpanel__btn chatpanel__btn--stop"
-            onClick={() => void cancel()}
+            onClick={onCancel}
           >
             Stop
           </button>
@@ -106,7 +129,7 @@ function ChatPanel({ onCodeGenerated }: ChatPanelProps) {
             type="button"
             className="chatpanel__btn chatpanel__btn--send"
             onClick={submit}
-            disabled={!input.trim()}
+            disabled={!input.trim() || disabled}
           >
             Send
           </button>

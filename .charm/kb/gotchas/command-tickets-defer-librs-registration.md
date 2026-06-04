@@ -3,10 +3,19 @@ id: command-tickets-defer-librs-registration
 root: gotchas
 type: gotcha
 status: current
-summary: "Command-adding tickets ship the command file but do NOT register it in lib.rs (out of their touches); new Tauri commands and new toolbar components sit unwired until the integration pass mounts them."
+summary: "Command-adding tickets ship the command file but do NOT register it in lib.rs (out of their touches); new Tauri commands and new toolbar components sit unwired until the integration pass mounts them. RESOLVED in T-032 -- lib.rs now registers everything."
 created: 2026-06-04
 updated: 2026-06-04
 ---
+
+> UPDATE (T-032 integration): the pending wiring below is now DONE. `lib.rs`
+> declares `mod claude_bridge;` plus `pub mod claude/export/projects/zip;`,
+> `.manage(commands::claude::ClaudeState::default())`, a `.setup()` that calls
+> `claude_bridge::ensure_claude_config(app.handle())`, and registers all eight
+> projects commands + the three claude commands + the two zip commands +
+> `export_tsx` in `generate_handler!`. `Toolbar.tsx` now mounts `<ProjectMenu />`
+> and `<ExportMenu />`. If you add a NEW command file after this, the same trap
+> applies again -- you still have to add its `pub mod` + handler lines here.
 
 Tickets that add backend commands declare only their own new files in `touches`
 (e.g. T-028 touches `commands/zip.rs`, `Cargo.toml`, `ProjectMenu.tsx`), but

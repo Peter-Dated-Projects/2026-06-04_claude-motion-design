@@ -11,6 +11,7 @@ import PhoneBezel, {
   BEZEL_OUTER_HEIGHT,
 } from "./PhoneBezel";
 import SafeZoneOverlay from "./SafeZoneOverlay";
+import ReplayControls from "./ReplayControls";
 import {
   useUIStore,
   type SafeZonePlatform,
@@ -77,8 +78,8 @@ function EyeIcon({ open }: { open: boolean }) {
   );
 }
 
-// Stand-in animation so the preview is demonstrable before Monaco (T-025) / Claude
-// codegen (T-024) are wired in during integration (T-032).
+// Fallback animation shown when no project is open yet (empty code). Once a project's
+// animation.tsx is loaded or Claude generates code, the parent passes it via `code`.
 const SAMPLE_CODE = `import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, spring } from 'remotion';
 
 export default function Sample() {
@@ -120,11 +121,17 @@ type SandboxMessage =
   | { type: "renderError"; message: string }
   | { type: "frameUpdate"; frame: number; totalFrames: number; isPlaying: boolean };
 
-function PreviewPanel() {
+interface PreviewPanelProps {
+  /** Current animation source, owned by the parent (App). Empty/undefined before a
+   *  project is open -> falls back to SAMPLE_CODE so the preview is never blank. */
+  code?: string;
+}
+
+function PreviewPanel({ code }: PreviewPanelProps) {
   // Pre-built once; future code edits only re-post a compiled bundle, not a new srcdoc.
   const srcDoc = useMemo(buildSrcDoc, []);
 
-  const [code] = useState(SAMPLE_CODE);
+  const source = code && code.trim().length > 0 ? code : SAMPLE_CODE;
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   // Mirrors the sandbox's playback state, read passively from `frameUpdate` events.
@@ -216,8 +223,8 @@ function PreviewPanel() {
   // --- Compile whenever the code changes --------------------------------------------
   useEffect(() => {
     setIsLoading(true);
-    workerRef.current?.postMessage({ type: "compile", code });
-  }, [code]);
+    workerRef.current?.postMessage({ type: "compile", code: source });
+  }, [source]);
 
   // --- Fit the bezel (screen + chrome) into the container, preserving aspect --------
   useEffect(() => {
@@ -366,6 +373,8 @@ function PreviewPanel() {
           </div>
         )}
       </div>
+
+      <ReplayControls iframeRef={iframeRef} containerRef={containerRef} />
     </section>
   );
 }
