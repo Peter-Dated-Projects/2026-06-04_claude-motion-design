@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "claude-motion",
+  "productName": "ClaudeMotion",
   "version": "0.1.0",
   "identifier": "ai.finks.claude-motion",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Claude Motion",
+        "title": "ClaudeMotion",
         "width": 1440,
         "height": 900,
         "minWidth": 1200,

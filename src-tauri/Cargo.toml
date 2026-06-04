@@ -1,7 +1,7 @@
 [package]
 name = "claude-motion"
 version = "0.1.0"
-description = "Claude Motion - AI-driven Remotion animation studio"
+description = "ClaudeMotion - AI-driven Remotion animation studio"
 authors = ["Finks"]
 edition = "2021"
 

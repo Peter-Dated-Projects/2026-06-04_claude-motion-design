@@ -124,7 +124,7 @@ function Onboarding(props: OnboardingProps) {
         <div style={CARD}>
           <h2 style={TITLE}>Claude Code not found</h2>
           <p style={BODY}>
-            Claude Motion drives the <code style={CODE}>claude</code> CLI on your
+            ClaudeMotion drives the <code style={CODE}>claude</code> CLI on your
             machine. Install it from <code style={CODE}>claude.ai/code</code>, then
             run <code style={CODE}>claude login</code> in your terminal. Once it is on
             your PATH, click "Check again".

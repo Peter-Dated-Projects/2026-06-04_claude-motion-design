@@ -269,8 +269,8 @@ function App() {
   // --- Window title + remember the last project -------------------------------------
   useEffect(() => {
     const title = activeProject?.name
-      ? `${activeProject.name} — Claude Motion`
-      : "Claude Motion";
+      ? `${activeProject.name} — ClaudeMotion`
+      : "ClaudeMotion";
     document.title = title;
     getCurrentWindow()
       .setTitle(title)
