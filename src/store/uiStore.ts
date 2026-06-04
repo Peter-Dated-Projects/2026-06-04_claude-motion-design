@@ -55,7 +55,7 @@ function persistPanelWidths(widths: [number, number, number]): void {
 export const useUIStore = create<UIState>((set) => ({
   panelWidths: loadPanelWidths(),
   isGenerating: false,
-  showSafeZone: false,
+  showSafeZone: true,
   safeZonePlatform: "universal",
   selection: null,
 
