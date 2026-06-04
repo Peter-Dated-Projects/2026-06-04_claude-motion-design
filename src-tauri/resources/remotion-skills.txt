@@ -1,0 +1,15 @@
+PLACEHOLDER - Remotion coding skills / system prompt.
+
+This file's real content is owned by ticket T-027 (T-IMPL-010, Prompt Engineering +
+Remotion Skills). It is appended to Claude's system prompt at runtime via the CLI flag
+--append-system-prompt-file, so whatever lands here is treated as authoritative guidance
+for how Claude writes Remotion animations.
+
+The bridge (T-022) only ships this placeholder so the resource exists and can be copied to
+{appDataDir}/claude-config/ on first launch. Do not rely on this text being final.
+
+Intended content (filled by T-027):
+- Remotion API rules (useCurrentFrame, useVideoConfig, interpolate, spring, Sequence, etc.)
+- The single default-exported composition contract the preview sandbox expects.
+- Platform safe-zone constraints (TikTok / Reels / YouTube Shorts) so generated motion
+  keeps key elements inside the visible-and-unobstructed region.
