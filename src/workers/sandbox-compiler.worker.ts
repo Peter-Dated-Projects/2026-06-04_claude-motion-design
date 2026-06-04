@@ -101,10 +101,60 @@ function bindImportsToGlobals(source: string): string {
   );
 }
 
+// Cap the one-time esbuild-wasm init. The wasm ships locally (Tauri resource /
+// Vite-hashed asset), so a healthy load is sub-second; if it has not finished in
+// this window something is wrong (a hung or 404'd asset fetch) and we reject
+// loudly rather than leave the preview stranded on "Compiling preview..." forever.
+const INIT_TIMEOUT_MS = 10_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms / 1000}s`)),
+      ms,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+// Fetch the wasm bytes explicitly instead of handing esbuild the URL and letting
+// it fetch internally. Under Tauri's asset protocol an internal fetch that 404s,
+// returns the wrong MIME type, or hangs can leave initialize() pending forever
+// with no error surfaced. Doing the fetch here means those failures become real
+// rejections (which the onmessage catch turns into a {type:'error'} reply), and
+// compiling from bytes sidesteps the streaming-compile MIME requirement.
+async function initEsbuild(): Promise<void> {
+  const res = await fetch(wasmURL);
+  if (!res.ok) {
+    throw new Error(
+      `Failed to load esbuild.wasm (${res.status} ${res.statusText}) from ${wasmURL}`,
+    );
+  }
+  const bytes = await res.arrayBuffer();
+  const wasmModule = await WebAssembly.compile(bytes);
+  await esbuild.initialize({ wasmModule, worker: false });
+}
+
 let initPromise: Promise<void> | null = null;
 function ensureInit(): Promise<void> {
   if (!initPromise) {
-    initPromise = esbuild.initialize({ wasmURL, worker: false });
+    // On failure, clear the cached promise so a later compile retries instead of
+    // re-awaiting a permanently-rejected init.
+    initPromise = withTimeout(initEsbuild(), INIT_TIMEOUT_MS, "esbuild-wasm init").catch(
+      (err) => {
+        initPromise = null;
+        throw err;
+      },
+    );
   }
   return initPromise;
 }
