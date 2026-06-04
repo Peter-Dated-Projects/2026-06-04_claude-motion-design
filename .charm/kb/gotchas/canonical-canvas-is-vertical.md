@@ -3,15 +3,19 @@ id: canonical-canvas-is-vertical
 root: gotchas
 type: gotcha
 status: current
-summary: "The shipped system prompt (remotion-skills.txt) is canonical: canvas is vertical 1080x1920, durationInFrames 150. The prompt-engineering.md research note still says 1920x1080 — do not 'fix' the prompt to match it."
+summary: "The shipped system prompt (remotion-skills.txt) is canonical: canvas is vertical 1080x1920 (FIXED), with default fps 30 / durationInFrames 150. The prompt-engineering.md research note still says 1920x1080 — do not 'fix' the prompt to match it."
 created: 2026-06-04
 updated: 2026-06-04
 ---
 
 `src-tauri/resources/remotion-skills.txt` is the authoritative system prompt — it is
 appended to Claude's system prompt at runtime via `--append-system-prompt-file`. It
-specifies a **vertical** composition: `width 1080, height 1920`, `fps 30`,
-`durationInFrames 150` (5s), matching the TikTok/Reels/Shorts target format.
+specifies a **vertical** composition: `width 1080, height 1920`, with `fps 30` and
+`durationInFrames 150` (5s) as DEFAULTS, matching the TikTok/Reels/Shorts target format.
+
+Update (T-033): fps and durationInFrames are now DEFAULTS, not fixed -- an animation may
+override them by exporting `fps`/`durationInFrames` (see [[animation-can-export-fps-duration]]).
+Width and height stay hard-fixed at 1080x1920; that part of this note still holds.
 
 The earlier research note `.charm/kb/prompt-engineering.md` (from T-009) still describes a
 **horizontal** `1920x1080` canvas and lists slightly different vocabulary. That note is

@@ -117,9 +117,19 @@ type WorkerMessage =
 
 type SandboxMessage =
   | { type: "sandboxReady" }
-  | { type: "renderOk" }
+  | { type: "renderOk"; fps?: number; durationInFrames?: number }
   | { type: "renderError"; message: string }
-  | { type: "frameUpdate"; frame: number; totalFrames: number; isPlaying: boolean };
+  | {
+      type: "frameUpdate";
+      frame: number;
+      totalFrames: number;
+      fps?: number;
+      isPlaying: boolean;
+    };
+
+// Defaults until the sandbox reports the animation's resolved fps. Must match the
+// DEFAULT_FPS in sandbox-frame.html.
+const DEFAULT_FPS = 30;
 
 interface PreviewPanelProps {
   /** Current animation source, owned by the parent (App). Empty/undefined before a
@@ -138,6 +148,9 @@ function PreviewPanel({ code }: PreviewPanelProps) {
   // Drives "auto-off on play": the safe-zone overlay hides while the animation runs.
   // ReplayControls (T-030) owns the actual playback commands; we only listen.
   const [isPlaying, setIsPlaying] = useState(false);
+  // Resolved fps reported by the sandbox (the animation may export its own). Threaded
+  // into ReplayControls so the time readout reflects the real frame rate, not 30.
+  const [fps, setFps] = useState(DEFAULT_FPS);
   // Fit transform for the bezel stage: how much to scale the 1080x1920 + bezel chrome
   // down to the container, and the centering offset. `scale` is also handed to the
   // safe-zone overlay so its strokes/labels stay crisp inside the scaled space.
@@ -213,6 +226,9 @@ function PreviewPanel({ code }: PreviewPanelProps) {
         // Read-only: track playback state so the safe-zone overlay auto-hides during
         // play. Replay COMMANDS belong to ReplayControls; we never post from here.
         setIsPlaying(data.isPlaying);
+        if (typeof data.fps === "number" && data.fps > 0) {
+          setFps(data.fps);
+        }
       }
     };
 
@@ -374,7 +390,7 @@ function PreviewPanel({ code }: PreviewPanelProps) {
         )}
       </div>
 
-      <ReplayControls iframeRef={iframeRef} containerRef={containerRef} />
+      <ReplayControls iframeRef={iframeRef} containerRef={containerRef} fps={fps} />
     </section>
   );
 }

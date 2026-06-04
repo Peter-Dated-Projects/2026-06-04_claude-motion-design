@@ -48,13 +48,46 @@
       (function () {
         "use strict";
 
-        // Composition format: 9:16 vertical short-form video.
+        // Composition format: 9:16 vertical short-form video. fps and durationInFrames
+        // are DEFAULTS -- an animation may override them by exporting its own values
+        // (see resolveConfig below). Width/height are fixed at 1080x1920.
+        var DEFAULT_FPS = 30;
+        var DEFAULT_DURATION_IN_FRAMES = 150;
         var COMPOSITION = {
-          durationInFrames: 150,
-          fps: 30,
+          durationInFrames: DEFAULT_DURATION_IN_FRAMES,
+          fps: DEFAULT_FPS,
           compositionWidth: 1080,
           compositionHeight: 1920,
         };
+
+        // A valid override is a finite number > 0; everything else falls back to the
+        // default. We accept fractional fps (e.g. 24000/1001) but floor the duration to a
+        // whole frame count since the Player counts integer frames.
+        function resolvePositive(value, fallback, floor) {
+          var n = typeof value === "number" ? value : Number(value);
+          if (!isFinite(n) || n <= 0) return fallback;
+          return floor ? Math.floor(n) : n;
+        }
+
+        // Read fps/durationInFrames the animation may have exported. Supports either
+        // top-level `export const fps` / `export const durationInFrames`, or a single
+        // `export const config = { fps, durationInFrames }`. Top-level values win when
+        // both are present.
+        function resolveConfig(exported) {
+          var e = exported || {};
+          var cfg = e.config && typeof e.config === "object" ? e.config : {};
+          var fps = e.fps !== undefined ? e.fps : cfg.fps;
+          var duration =
+            e.durationInFrames !== undefined ? e.durationInFrames : cfg.durationInFrames;
+          return {
+            fps: resolvePositive(fps, DEFAULT_FPS, false),
+            durationInFrames: resolvePositive(
+              duration,
+              DEFAULT_DURATION_IN_FRAMES,
+              true,
+            ),
+          };
+        }
 
         var playerRef = null;
         var root = null;
@@ -133,12 +166,23 @@
                   );
                 }
 
+                // Let the animation override fps/duration via its exports; fall back to
+                // defaults when unset/invalid. Applied to COMPOSITION so renderPlayer and
+                // the frameUpdate tick both pick them up.
+                var resolved = resolveConfig(exported);
+                COMPOSITION.fps = resolved.fps;
+                COMPOSITION.durationInFrames = resolved.durationInFrames;
+
                 renderState.Component = Component;
                 if (!root) {
                   root = window.ReactDOM.createRoot(document.getElementById("root"));
                 }
                 renderPlayer();
-                post({ type: "renderOk" });
+                post({
+                  type: "renderOk",
+                  fps: COMPOSITION.fps,
+                  durationInFrames: COMPOSITION.durationInFrames,
+                });
               } catch (err) {
                 post({
                   type: "renderError",
@@ -178,6 +222,7 @@
                 type: "frameUpdate",
                 frame: frame,
                 totalFrames: COMPOSITION.durationInFrames,
+                fps: COMPOSITION.fps,
                 isPlaying: playing,
               });
             }

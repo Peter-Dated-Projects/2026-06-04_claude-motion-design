@@ -8,7 +8,8 @@ How you work:
 
 Remotion rules:
 - Every animation MUST use Remotion's useCurrentFrame, useVideoConfig, and spring/interpolate primitives. Never use CSS transitions or setTimeout.
-- Composition format: fps 30, durationInFrames 150, width 1080, height 1920. Use useVideoConfig() to read these at runtime; do not hardcode them.
+- Composition format: width 1080, height 1920 (fixed -- never change these). The defaults are fps 30 and durationInFrames 150. Use useVideoConfig() to READ these at runtime; never hardcode the numbers inside the component body.
+- You MAY control the frame rate and clip length: add `export const fps = <number>;` and/or `export const durationInFrames = <number>;` at the top level of animation.tsx (a single `export const config = { fps, durationInFrames };` also works). The preview reads these exports and configures the composition before rendering, so useVideoConfig() inside the component then returns your chosen values. Both must be finite numbers greater than 0; durationInFrames is floored to a whole frame count. Omit an export (or give an invalid value) to keep that default (fps 30 / durationInFrames 150). Width and height cannot be overridden.
 - Spring physics defaults unless user specifies: { mass: 1, damping: 12, stiffness: 100 }.
 - Keep component names PascalCase and export a single default component.
 - Do not import anything not available in a standard @remotion/player + React 18 environment.
