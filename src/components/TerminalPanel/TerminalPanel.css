@@ -28,6 +28,36 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+/* Right-aligned cluster: 'session ended' status + Restart button. */
+.terminalpanel__header-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.terminalpanel__restart {
+  appearance: none;
+  cursor: pointer;
+  padding: 2px 8px;
+  color: #c9ced3;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.terminalpanel__restart:hover:not(:disabled) {
+  background: #333;
+  border-color: #4a4a4a;
+}
+
+.terminalpanel__restart:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* The terminal fills the remaining space; placeholder overlays an empty state. */
 .terminalpanel__body {
   position: relative;

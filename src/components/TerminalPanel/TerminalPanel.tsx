@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
@@ -39,6 +39,32 @@ function TerminalPanel() {
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const [exited, setExited] = useState(false);
+  const [opening, setOpening] = useState(false);
+  // Hard re-entrancy guard: blocks a double-spawn from rapid restart clicks or
+  // an in-flight open racing a slug change, independent of React's async state.
+  const openingRef = useRef(false);
+
+  // --- The single (re)open path, shared by the [slug] effect and the Restart
+  //     button. PtyBridge::open kills any predecessor + spawns fresh, so calling
+  //     terminal_open again for the same slug is safe. ---------------------------
+  const openSession = useCallback(async () => {
+    if (!slug || openingRef.current) return;
+    openingRef.current = true;
+    setOpening(true);
+    setExited(false);
+    termRef.current?.clear();
+    try {
+      await invoke("terminal_open", { slug });
+      // Sync the PTY to the current terminal size right after open.
+      const t = termRef.current;
+      if (t) await invoke("terminal_resize", { cols: t.cols, rows: t.rows });
+    } catch {
+      setExited(true);
+    } finally {
+      openingRef.current = false;
+      setOpening(false);
+    }
+  }, [slug]);
 
   // --- Create the xterm instance once and mount it into the host div. --------
   useEffect(() => {
@@ -122,31 +148,30 @@ function TerminalPanel() {
   // --- (Re-)open the PTY whenever the active project's slug changes. ---------
   useEffect(() => {
     if (!slug) return;
-    setExited(false);
-    termRef.current?.clear();
-
-    void invoke("terminal_open", { slug })
-      .then(() => {
-        // Sync the PTY to the current terminal size right after open.
-        const t = termRef.current;
-        if (t) void invoke("terminal_resize", { cols: t.cols, rows: t.rows });
-      })
-      .catch(() => {
-        setExited(true);
-      });
+    void openSession();
 
     return () => {
       void invoke("terminal_close").catch(() => {});
     };
-  }, [slug]);
+  }, [slug, openSession]);
 
   return (
     <section className="panel panel--terminal">
       <header className="panel__header terminalpanel__header">
         <span className="terminalpanel__title">Claude</span>
         {exited && (
-          <span className="terminalpanel__status" role="status">
-            session ended
+          <span className="terminalpanel__header-end">
+            <span className="terminalpanel__status" role="status">
+              session ended
+            </span>
+            <button
+              type="button"
+              className="terminalpanel__restart"
+              onClick={() => void openSession()}
+              disabled={!slug || opening}
+            >
+              Restart
+            </button>
           </span>
         )}
       </header>
