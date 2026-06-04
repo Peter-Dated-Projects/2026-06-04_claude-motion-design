@@ -193,11 +193,20 @@ function App() {
   }, [code]);
 
   // Editor edits: keep state in sync and auto-save (Monaco already debounces 500ms).
-  const handleCodeChange = useCallback((next: string) => {
-    setCode(next);
-    const slug = useProjectStore.getState().activeProject?.slug;
-    if (slug) invoke("save_animation", { slug, code: next }).catch(() => {});
-  }, []);
+  const handleCodeChange = useCallback(
+    (next: string) => {
+      setCode(next);
+      const slug = useProjectStore.getState().activeProject?.slug;
+      if (slug)
+        invoke("save_animation", { slug, code: next }).catch((err) =>
+          pushToast({
+            kind: "error",
+            text: `Couldn't save animation: ${String(err)}`,
+          }),
+        );
+    },
+    [pushToast],
+  );
 
   // --- Startup: check the CLI, load projects, reopen the last one -------------------
   useEffect(() => {
@@ -214,11 +223,16 @@ function App() {
         if (last && list.some((p) => p.slug === last)) {
           await openProject(last);
         }
-      } catch {
-        // A failed project load leaves the onboarding/empty state to take over.
+      } catch (err) {
+        // Onboarding/empty state still takes over, but tell the user the load failed
+        // rather than leaving them staring at an empty workspace with no explanation.
+        pushToast({
+          kind: "warn",
+          text: `Couldn't load your projects: ${String(err)}`,
+        });
       }
     })();
-  }, [loadProjects, openProject]);
+  }, [loadProjects, openProject, pushToast]);
 
   // --- Load the active project's animation source -----------------------------------
   useEffect(() => {
@@ -232,13 +246,19 @@ function App() {
       .then((src) => {
         if (!cancelled) setCode(src);
       })
-      .catch(() => {
-        if (!cancelled) setCode("");
+      .catch((err) => {
+        if (!cancelled) {
+          setCode("");
+          pushToast({
+            kind: "error",
+            text: `Couldn't load animation: ${String(err)}`,
+          });
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [activeProject?.slug]);
+  }, [activeProject?.slug, pushToast]);
 
   // --- Watch animation.tsx on disk: it is the display source of truth ---------------
   // Both the user (Monaco) and Claude (terminal) write this file; the backend
@@ -258,13 +278,18 @@ function App() {
       else unlisten = un;
     });
 
-    invoke("watch_animation", { slug }).catch(() => {});
+    invoke("watch_animation", { slug }).catch((err) =>
+      pushToast({
+        kind: "warn",
+        text: `File watching unavailable -- external edits won't refresh the preview: ${String(err)}`,
+      }),
+    );
 
     return () => {
       disposed = true;
       unlisten?.();
     };
-  }, [activeProject?.slug]);
+  }, [activeProject?.slug, pushToast]);
 
   // --- Window title + remember the last project -------------------------------------
   useEffect(() => {

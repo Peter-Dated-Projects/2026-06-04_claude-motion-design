@@ -125,20 +125,55 @@
           );
         }
 
+        // The animation bundle is compiled in esbuild TRANSFORM mode, so an import of a
+        // module the sandbox does not provide is emitted as a bare `require("<mod>")`
+        // call. There is no module loader here, so define a `require` that throws a
+        // clear, NAMED error -- otherwise the user just sees a cryptic
+        // "require is not defined". The supported modules (react, react-dom, remotion,
+        // @remotion/player) are rewritten to window globals at compile time and never
+        // reach this shim.
+        window.require = function (name) {
+          throw new Error(
+            "This animation imports '" +
+              name +
+              "', which isn't available in the preview runtime. Only 'react', " +
+              "'react-dom', 'remotion', and '@remotion/player' can be imported.",
+          );
+        };
+
         // Inject the compiled animation IIFE as a blob-URL <script> (NOT eval) so we never
         // need CSP 'unsafe-eval'. It assigns window.AnimationExports.
+        //
+        // A blob script that THROWS while executing (e.g. the require shim above, or any
+        // runtime error in the animation) still fires `onload` -- the runtime exception
+        // goes to the window 'error' event, NOT the script's `onerror`. We capture that
+        // exception via a one-shot listener and resolve with it, so the caller can
+        // surface the REAL cause instead of the misleading generic "must export default"
+        // message. Resolves with the captured Error, or null if the bundle ran clean.
         function runBundle(code) {
           return new Promise(function (resolve, reject) {
             var blob = new Blob([code], { type: "text/javascript" });
             var url = URL.createObjectURL(blob);
             var s = document.createElement("script");
             s.src = url;
-            s.onload = function () {
+            var runtimeError = null;
+            function onError(event) {
+              if (runtimeError) return; // keep the first error
+              runtimeError =
+                (event && event.error) ||
+                new Error((event && event.message) || "Error running animation.");
+            }
+            window.addEventListener("error", onError);
+            function cleanup() {
+              window.removeEventListener("error", onError);
               URL.revokeObjectURL(url);
-              resolve();
+            }
+            s.onload = function () {
+              cleanup();
+              resolve(runtimeError);
             };
             s.onerror = function () {
-              URL.revokeObjectURL(url);
+              cleanup();
               reject(new Error("Failed to execute compiled animation bundle."));
             };
             document.head.appendChild(s);
@@ -156,11 +191,18 @@
                 }
                 // Fresh global before each run so a failed compile can't leave a stale component.
                 window.AnimationExports = undefined;
-                await runBundle(data.bundle);
+                var runtimeError = await runBundle(data.bundle);
 
                 var exported = window.AnimationExports;
                 var Component = exported && (exported.default || exported.Main);
                 if (typeof Component !== "function") {
+                  // No component AND the bundle threw while executing (unsupported
+                  // import, runtime error, ...): that thrown error is the REAL reason
+                  // there are no exports, so surface it instead of the misleading
+                  // generic message below.
+                  if (runtimeError) {
+                    throw runtimeError;
+                  }
                   throw new Error(
                     "Animation must `export default` a React component.",
                   );
