@@ -4,6 +4,7 @@ Traps, flaky behavior, and non-obvious constraints -- the things that bite you t
 
 | Note | Summary | Status |
 |---|---|---|
+| [preview-compile-fix-holds-failed-ticket-was-headless-gate](preview-compile-fix-holds-failed-ticket-was-headless-gate.md) | The 'failed' preview-hang ticket (esbuild-wasm init) was a headless-tester limitation, not a code defect -- the fix in commit b9e5226 holds (build + wasm version-match + WebAssembly.compile all pass); only open item is a live-webview visual confirm at the human gate. | current |
 | [esbuild-wasm-init-fetch-and-timeout](esbuild-wasm-init-fetch-and-timeout.md) | The sandbox compiler must fetch esbuild.wasm bytes itself + WebAssembly.compile (not pass wasmURL) and cap init with a timeout, or a hung/wrong-MIME asset load strands the preview on 'Compiling preview...' forever with no error. | current |
 | [replay-autoplay-first-render-only](replay-autoplay-first-render-only.md) | ReplayControls must autoplay only the first sandbox renderOk per session (hasAutoplayedRef); posting play on every renderOk hijacks playback on every recompile while iterating. | current |
 | [react-18-pin-not-19](react-18-pin-not-19.md) | React is deliberately pinned to 18.3.x, not 19 — the preview runtime bundles React 18 UMD, so bumping React breaks the sandbox preview. | current |
