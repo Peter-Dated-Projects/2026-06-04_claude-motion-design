@@ -2,11 +2,20 @@
 id: useclaude-validate-retry-second-worker
 root: gotchas
 type: gotcha
-status: current
-summary: "useClaude runs its OWN second esbuild-wasm worker to validate generated code before preview, and the syntax-error retry loop re-invokes Claude (--resume) up to twice WITHOUT showing the failed attempts as chat bubbles."
+status: superseded
+summary: "(SUPERSEDED) useClaude ran its own second esbuild-wasm worker to validate generated code with a retry loop; the whole chat/scrape path was deleted in the terminal pivot -- see terminal-is-pty-io-not-code-source."
 created: 2026-06-04
 updated: 2026-06-04
+related:
+  - terminal-is-pty-io-not-code-source
 ---
+
+> SUPERSEDED (2026-06-04): The architecture pivoted to an embedded interactive
+> Claude terminal. `src/hooks/useClaude.ts` and the entire chat/scrape loop
+> described below were deleted; code now flows from the `animation://changed`
+> file watcher, not from validating scraped `<code>` blocks. Kept for history.
+> See [terminal-is-pty-io-not-code-source].
+
 
 The `claude://done` handler in `src/hooks/useClaude.ts` does NOT hand generated
 code straight to the editor/preview. It first gates the code through a validate
