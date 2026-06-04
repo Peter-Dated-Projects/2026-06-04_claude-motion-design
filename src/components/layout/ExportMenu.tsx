@@ -1,9 +1,9 @@
 // Export actions dropdown: Export TSX / Export MP4 (coming soon) / Export ZIP.
 //
-// Self-contained component, mirroring ProjectMenu.tsx. It is not yet mounted in
-// Toolbar.tsx -- wiring it into the toolbar is left to the integration pass
-// (Toolbar.tsx is outside this ticket's scope), same as registering the
-// export_tsx / export_project_zip commands in lib.rs.
+// Self-contained component, mirroring ProjectMenu.tsx. Mounted in the toolbar's
+// right group (Toolbar.tsx). The dropdown floats below the trigger via the
+// .export-menu / .export-menu__dropdown rules in App.css (position: relative
+// wrapper + position: absolute panel, right-anchored).
 //
 // Export TSX writes the active project's animation.tsx to a chosen path (and
 // copies its assets/ alongside). Export ZIP delegates to the project zip command.

@@ -1,8 +1,9 @@
 // Project actions dropdown: Export ZIP / Import ZIP.
 //
-// Self-contained component. It is not yet mounted in Toolbar.tsx -- wiring it
-// into the toolbar is left to the integration pass (Toolbar.tsx is outside this
-// ticket's scope), same as registering the zip commands in lib.rs.
+// Self-contained component. Mounted in the toolbar's right group (Toolbar.tsx).
+// The dropdown floats below the trigger via the .project-menu /
+// .project-menu__dropdown rules in App.css (position: relative wrapper +
+// position: absolute panel, right-anchored).
 //
 // Export zips the active project; import opens a zip, extracts it, and opens the
 // resulting project. Both Rust commands return a "cancelled" error string when

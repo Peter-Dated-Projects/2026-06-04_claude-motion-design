@@ -91,6 +91,94 @@ body.is-resizing {
   text-align: center;
 }
 
+/* --- Toolbar dropdown menus (Export / Project) --- */
+/* The wrapper anchors the absolutely-positioned dropdown/toast so they float
+   below the trigger instead of pushing or overlapping toolbar content. */
+.export-menu,
+.project-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.export-menu__trigger,
+.project-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.export-menu__caret,
+.project-menu__caret {
+  font-size: 10px;
+  color: #9a9a9a;
+}
+
+.export-menu__dropdown,
+.project-menu__dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  padding: 4px;
+  background: #1d1d1d;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
+.export-menu__item,
+.project-menu__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: #f6f6f6;
+  cursor: pointer;
+}
+
+.export-menu__item:hover:not(:disabled),
+.project-menu__item:hover:not(:disabled) {
+  background: #2a2a2a;
+}
+
+.export-menu__item:disabled,
+.project-menu__item:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.export-menu__toast,
+.project-menu__toast {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  max-width: 280px;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid #2a2a2a;
+  background: #1d1d1d;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
+.export-menu__toast--success,
+.project-menu__toast--success {
+  color: #7ee787;
+}
+
+.export-menu__toast--error,
+.project-menu__toast--error {
+  color: #ff7b72;
+}
+
 /* --- Panels --- */
 .panels {
   flex: 1 1 auto;
