@@ -73,24 +73,40 @@ pub fn project_dir(app: &AppHandle, slug: &str) -> Result<PathBuf, String> {
     Ok(base.join("ClaudeMotion").join("projects").join(slug))
 }
 
-/// Copy the embedded MCP config and skills file into `{appDataDir}/claude-config/`
-/// if they are not already present. Call once from the Tauri `setup` hook.
+/// Write `contents` to `path` only when it would change the file: the file is
+/// absent, or its current contents differ from `contents`. Returns without
+/// touching disk when they already match, so an unchanged config is never
+/// needlessly rewritten.
+fn write_if_changed(path: &std::path::Path, contents: &str, label: &str) -> Result<(), String> {
+    // A read failure (missing file, etc.) is treated as "needs write" rather
+    // than an error -- the subsequent write surfaces any real I/O problem.
+    if std::fs::read_to_string(path).ok().as_deref() == Some(contents) {
+        return Ok(());
+    }
+    std::fs::write(path, contents).map_err(|e| format!("failed to write {label}: {e}"))
+}
+
+/// Materialize the embedded MCP config and skills file into
+/// `{appDataDir}/claude-config/`, overwriting the cached copy whenever the
+/// embedded content differs from what's on disk. Call once from the Tauri
+/// `setup` hook.
+///
+/// This is overwrite-on-change, NOT seed-if-absent, and that distinction is
+/// load-bearing: the skills prompt and MCP config are embedded at compile time
+/// via `include_str!` and delivered to the `claude` CLI from these cached files.
+/// With seed-if-absent, any user who had launched the app even once would keep a
+/// stale copy forever -- so fixes to `remotion-skills.txt` / the MCP config would
+/// silently never reach them. Comparing against the embedded const and rewriting
+/// on change ships those fixes on the next launch while leaving an up-to-date
+/// file untouched. Only these two app-managed files are written; no user-owned
+/// state in the dir is touched.
 pub fn ensure_claude_config(app: &AppHandle) -> Result<(), String> {
     let dir = claude_config_dir(app)?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create claude-config dir: {e}"))?;
 
-    let mcp = dir.join(MCP_CONFIG_FILE);
-    if !mcp.exists() {
-        std::fs::write(&mcp, MCP_CONFIG_CONTENTS)
-            .map_err(|e| format!("failed to write {MCP_CONFIG_FILE}: {e}"))?;
-    }
-
-    let skills = dir.join(SKILLS_FILE);
-    if !skills.exists() {
-        std::fs::write(&skills, SKILLS_CONTENTS)
-            .map_err(|e| format!("failed to write {SKILLS_FILE}: {e}"))?;
-    }
+    write_if_changed(&dir.join(MCP_CONFIG_FILE), MCP_CONFIG_CONTENTS, MCP_CONFIG_FILE)?;
+    write_if_changed(&dir.join(SKILLS_FILE), SKILLS_CONTENTS, SKILLS_FILE)?;
 
     Ok(())
 }
