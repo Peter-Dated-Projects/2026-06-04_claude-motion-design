@@ -4,6 +4,7 @@ Traps, flaky behavior, and non-obvious constraints -- the things that bite you t
 
 | Note | Summary | Status |
 |---|---|---|
+| [mosaic-drag-swallowed-by-iframe](mosaic-drag-swallowed-by-iframe.md) | react-mosaic tile drags snap back because the preview iframe / Monaco swallow the native HTML5 drag as the cursor crosses them; fix is pointer-events:none on .mosaic-window-body while a `panels--dragging` class is set. | current |
 | [preview-compile-fix-holds-failed-ticket-was-headless-gate](preview-compile-fix-holds-failed-ticket-was-headless-gate.md) | The 'failed' preview-hang ticket (esbuild-wasm init) was a headless-tester limitation, not a code defect -- the fix in commit b9e5226 holds (build + wasm version-match + WebAssembly.compile all pass); only open item is a live-webview visual confirm at the human gate. | current |
 | [esbuild-wasm-init-fetch-and-timeout](esbuild-wasm-init-fetch-and-timeout.md) | The sandbox compiler must fetch esbuild.wasm bytes itself + WebAssembly.compile (not pass wasmURL) and cap init with a timeout, or a hung/wrong-MIME asset load strands the preview on 'Compiling preview...' forever with no error. | current |
 | [esbuild-wasm-no-concurrent-transform](esbuild-wasm-no-concurrent-transform.md) | esbuild-wasm with worker:false can DEADLOCK on overlapping transform calls, so the sandbox compiler must single-flight transforms; the preview also needs a generation-tagged watchdog so a missing compile/render reply can't strand the overlay on 'Compiling preview...' forever. | current |

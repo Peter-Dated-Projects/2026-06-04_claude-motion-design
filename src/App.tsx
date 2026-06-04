@@ -156,6 +156,12 @@ function ToastStack({
 
 function App() {
   const [layout, setLayout] = useState<MosaicNode<PanelId>>(loadLayout);
+  // True while a mosaic tile is being dragged by its header. We use it to drop
+  // pointer events on tile content (the preview iframe / Monaco) for the
+  // duration of the drag -- otherwise those heavy children swallow the native
+  // HTML5 drag as the cursor passes over them, react-mosaic never sees a valid
+  // drop, and the layout snaps back to where it started.
+  const [isDragging, setIsDragging] = useState(false);
 
   const projects = useProjectStore((s) => s.projects);
   const activeProject = useProjectStore((s) => s.activeProject);
@@ -508,7 +514,12 @@ function App() {
         onOpenSettings={() => setSettingsOpen(true)}
         onNewProject={() => setNewProjectOpen(true)}
       />
-      <div className="panels mosaic-dark">
+      <div
+        className={`panels mosaic-dark${isDragging ? " panels--dragging" : ""}`}
+        onDragStart={() => setIsDragging(true)}
+        onDragEnd={() => setIsDragging(false)}
+        onDrop={() => setIsDragging(false)}
+      >
         <Mosaic<PanelId>
           className=""
           value={layout}

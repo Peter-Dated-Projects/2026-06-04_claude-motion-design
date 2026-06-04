@@ -208,6 +208,16 @@ body,
   letter-spacing: 0.02em;
 }
 
+/* While a tile is being dragged by its header, drop pointer events on tile
+   CONTENT so the preview iframe / Monaco editor stop swallowing the native
+   HTML5 drag as the cursor crosses them. Without this the drag never completes
+   over those children and react-mosaic reverts the layout (the "snaps back"
+   bug). `.drop-target-container` is a sibling of `.mosaic-window-body` (not a
+   child), so the 5 drop-zone overlays keep receiving dragover/drop events. */
+.panels--dragging .mosaic-window-body {
+  pointer-events: none;
+}
+
 /* --- Mosaic dark theme override -------------------------------------------- */
 /* react-mosaic ships a light theme by default; repaint the chrome (tile bg,
    window header, splitter, drop preview) to the app's dark palette. */
