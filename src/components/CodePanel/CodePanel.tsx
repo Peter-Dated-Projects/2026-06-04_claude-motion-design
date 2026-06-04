@@ -172,6 +172,8 @@ function CodePanel({
   const openFile = useUIStore((s) => s.openFile);
   const closeFile = useUIStore((s) => s.closeFile);
   const setActiveFile = useUIStore((s) => s.setActiveFile);
+  const showFileTree = useUIStore((s) => s.showFileTree);
+  const toggleFileTree = useUIStore((s) => s.toggleFileTree);
 
   const editorRef = useRef<CodeEditor | null>(null);
   const [copied, setCopied] = useState(false);
@@ -204,24 +206,36 @@ function CodePanel({
   return (
     <section className="panel panel--code">
       <div className="codepanel__layout">
-        <aside className="filetree" aria-label="Project files">
-          <div className="filetree__header">Files</div>
-          {tree.length === 0 ? (
-            <div className="filetree__empty">No files</div>
-          ) : (
-            <TreeView
-              nodes={tree}
-              depth={0}
-              activeFile={activeFile}
-              collapsed={collapsed}
-              onToggleDir={onToggleDir}
-              onOpenFile={openFile}
-            />
-          )}
-        </aside>
+        {showFileTree && (
+          <aside className="filetree" aria-label="Project files">
+            <div className="filetree__header">Files</div>
+            {tree.length === 0 ? (
+              <div className="filetree__empty">No files</div>
+            ) : (
+              <TreeView
+                nodes={tree}
+                depth={0}
+                activeFile={activeFile}
+                collapsed={collapsed}
+                onToggleDir={onToggleDir}
+                onOpenFile={openFile}
+              />
+            )}
+          </aside>
+        )}
 
         <div className="codepanel__main">
           <div className="codetabs" role="tablist">
+            <button
+              type="button"
+              className="codepanel__tree-toggle"
+              onClick={toggleFileTree}
+              aria-label={showFileTree ? "Hide file tree" : "Show file tree"}
+              aria-pressed={showFileTree}
+              title={showFileTree ? "Hide file tree" : "Show file tree"}
+            >
+              {showFileTree ? "<<" : ">>"}
+            </button>
             <div className="codetabs__scroll">
               {openFiles.map((path) => {
                 const isActive = path === activeFile;

@@ -121,6 +121,26 @@
   border-bottom: 1px solid #2a2a2a;
 }
 
+/* Toggle for the file-tree rail, pinned to the left of the tabs row. */
+.codepanel__tree-toggle {
+  appearance: none;
+  border: none;
+  border-right: 1px solid #2a2a2a;
+  background: transparent;
+  color: #9aa0a6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 10px;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.codepanel__tree-toggle:hover {
+  background: #2a2a2a;
+  color: #ddd;
+}
+
 .codetabs__scroll {
   display: flex;
   align-items: stretch;

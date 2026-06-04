@@ -16,6 +16,9 @@ export interface UIState {
   safeZonePlatform: SafeZonePlatform;
   selection: Selection | null;
 
+  /** Whether the Code panel's file-tree rail is shown. Persisted. */
+  showFileTree: boolean;
+
   /** Project-relative paths of files with an open editor tab, in tab order. */
   openFiles: string[];
   /** The path of the file currently shown in the editor, or null if none. */
@@ -26,6 +29,8 @@ export interface UIState {
   toggleSafeZone: () => void;
   setSafeZonePlatform: (platform: SafeZonePlatform) => void;
   setSelection: (selection: Selection | null) => void;
+  /** Show or hide the Code panel's file-tree rail (persisted). */
+  toggleFileTree: () => void;
 
   /** Open a file: add a tab if absent and make it active. */
   openFile: (path: string) => void;
@@ -39,6 +44,27 @@ export interface UIState {
 
 const PANEL_WIDTHS_KEY = "claude-motion:panelWidths";
 const DEFAULT_WIDTHS: [number, number, number] = [25, 37, 38];
+
+const FILE_TREE_KEY = "claude-motion:showFileTree";
+
+function loadShowFileTree(): boolean {
+  try {
+    const raw = localStorage.getItem(FILE_TREE_KEY);
+    if (raw === null) return true;
+    return raw === "true";
+  } catch {
+    // Storage unavailable -> default to shown.
+    return true;
+  }
+}
+
+function persistShowFileTree(show: boolean): void {
+  try {
+    localStorage.setItem(FILE_TREE_KEY, String(show));
+  } catch {
+    // Best-effort; ignore quota/availability errors.
+  }
+}
 
 function loadPanelWidths(): [number, number, number] {
   try {
@@ -72,6 +98,7 @@ export const useUIStore = create<UIState>((set) => ({
   showSafeZone: true,
   safeZonePlatform: "universal",
   selection: null,
+  showFileTree: loadShowFileTree(),
   openFiles: [],
   activeFile: null,
 
@@ -83,6 +110,12 @@ export const useUIStore = create<UIState>((set) => ({
   toggleSafeZone: () => set((state) => ({ showSafeZone: !state.showSafeZone })),
   setSafeZonePlatform: (platform) => set({ safeZonePlatform: platform }),
   setSelection: (selection) => set({ selection }),
+  toggleFileTree: () =>
+    set((state) => {
+      const showFileTree = !state.showFileTree;
+      persistShowFileTree(showFileTree);
+      return { showFileTree };
+    }),
 
   openFile: (path) =>
     set((state) => ({
