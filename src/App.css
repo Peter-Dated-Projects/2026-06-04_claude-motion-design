@@ -222,6 +222,119 @@ body,
   pointer-events: none;
 }
 
+/* --- Panel management controls (show/hide + reset) ------------------------- */
+/* A floating cluster pinned to the top-right of the panels region. It sits
+   above the mosaic chrome so it's reachable regardless of the tile layout. */
+.panels-controls {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.panels-controls__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #ffffff;
+  color: #1f1f1f;
+  border: 1px solid #cfcfcf;
+  border-radius: 6px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-family: Inter, sans-serif;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.panels-controls__btn:hover {
+  background: #e8e8e8;
+}
+
+.panels-controls__caret {
+  font-size: 9px;
+  color: #888;
+}
+
+.panels-controls__dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 150px;
+  padding: 4px;
+  background: #ffffff;
+  border: 1px solid #d4d4d4;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
+}
+
+.panels-controls__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 13px;
+  color: #1f1f1f;
+  cursor: pointer;
+}
+
+.panels-controls__item:hover:not(:disabled) {
+  background: #ececec;
+}
+
+.panels-controls__item:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.panels-controls__check {
+  display: inline-block;
+  width: 12px;
+  font-weight: 600;
+  color: #1d4ed8;
+}
+
+/* Empty state shown when every panel is hidden. */
+.panels-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.panels-empty__text {
+  margin: 0;
+  color: #6a6a6a;
+  font-size: 14px;
+}
+
+.panels-empty__btn {
+  background: #ffffff;
+  color: #1f1f1f;
+  border: 1px solid #cfcfcf;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.panels-empty__btn:hover {
+  background: #e8e8e8;
+}
+
 /* --- Mosaic light theme override ------------------------------------------- */
 /* react-mosaic ships the Blueprint light theme by default, but <Mosaic> is
    mounted with className="" (the empty string drops the bundled bp3 theme so

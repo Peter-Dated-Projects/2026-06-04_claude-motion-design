@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Mosaic, MosaicWindow, type MosaicNode } from "react-mosaic-component";
+import {
+  Mosaic,
+  MosaicWindow,
+  getLeaves,
+  type MosaicNode,
+} from "react-mosaic-component";
 import "react-mosaic-component/react-mosaic-component.css";
 import "./App.css";
 import Toolbar from "./components/layout/Toolbar";
@@ -30,6 +35,10 @@ const PANEL_TITLES: Record<PanelId, string> = {
   preview: "Preview",
 };
 
+// Canonical left-to-right order, used to dock a re-added panel on a sensible
+// side (a panel that sorts before everything currently shown docks left).
+const PANEL_ORDER: PanelId[] = ["terminal", "editor", "preview"];
+
 const LAYOUT_KEY = "claude-motion:panelLayout";
 
 const DEFAULT_LAYOUT: MosaicNode<PanelId> = {
@@ -44,14 +53,49 @@ const DEFAULT_LAYOUT: MosaicNode<PanelId> = {
   splitPercentage: 33,
 };
 
-function loadLayout(): MosaicNode<PanelId> {
+// A null layout means every panel is hidden -- a valid (if degenerate) state we
+// render as an empty state rather than crashing Mosaic on an empty tree.
+function loadLayout(): MosaicNode<PanelId> | null {
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
-    if (raw) return JSON.parse(raw) as MosaicNode<PanelId>;
+    if (raw) return JSON.parse(raw) as MosaicNode<PanelId> | null;
   } catch {
     // Corrupt/absent layout falls back to the default.
   }
   return DEFAULT_LAYOUT;
+}
+
+// Remove a panel leaf from the layout tree, collapsing its now-only-child
+// parent into the surviving sibling so the rest of the user's arrangement is
+// preserved. Returns null when the tree becomes empty (last panel removed).
+function removeLeaf(
+  tree: MosaicNode<PanelId> | null,
+  id: PanelId,
+): MosaicNode<PanelId> | null {
+  if (tree == null) return null;
+  if (typeof tree === "string") return tree === id ? null : tree;
+  const first = removeLeaf(tree.first, id);
+  const second = removeLeaf(tree.second, id);
+  if (first == null) return second;
+  if (second == null) return first;
+  return { ...tree, first, second };
+}
+
+// Splice a hidden panel back into the layout. An empty tree becomes the lone
+// leaf; otherwise it docks as a new row split, on the left if it sorts before
+// every currently-shown panel (per PANEL_ORDER), else on the right.
+function addLeaf(
+  tree: MosaicNode<PanelId> | null,
+  id: PanelId,
+): MosaicNode<PanelId> {
+  if (tree == null) return id;
+  const idIndex = PANEL_ORDER.indexOf(id);
+  const placeFirst = getLeaves(tree).every(
+    (leaf) => idIndex < PANEL_ORDER.indexOf(leaf),
+  );
+  return placeFirst
+    ? { direction: "row", first: id, second: tree, splitPercentage: 33 }
+    : { direction: "row", first: tree, second: id, splitPercentage: 66 };
 }
 
 // ---------------------------------------------------------------------------
@@ -154,8 +198,79 @@ function ToastStack({
   );
 }
 
+// Floating control cluster (top-right of the panels region) to show/hide each
+// panel and reset the layout. The toolbar is a separate component out of this
+// ticket's scope, so the controls live on the panels region itself.
+function PanelsControls({
+  visible,
+  onToggle,
+  onReset,
+}: {
+  visible: PanelId[];
+  onToggle: (id: PanelId) => void;
+  onReset: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocMouseDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [open]);
+
+  return (
+    <div className="panels-controls" ref={ref}>
+      <button
+        type="button"
+        className="panels-controls__btn"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="true"
+        aria-expanded={open}
+      >
+        Panels <span className="panels-controls__caret">v</span>
+      </button>
+      <button
+        type="button"
+        className="panels-controls__btn"
+        onClick={onReset}
+        title="Reset to the default panel layout"
+      >
+        Reset layout
+      </button>
+      {open && (
+        <div className="panels-controls__dropdown" role="menu">
+          {PANEL_ORDER.map((id) => {
+            const shown = visible.includes(id);
+            // Never let the user hide the last remaining panel.
+            const lockLast = shown && visible.length <= 1;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={shown}
+                className="panels-controls__item"
+                disabled={lockLast}
+                title={lockLast ? "Can't hide the last panel" : undefined}
+                onClick={() => onToggle(id)}
+              >
+                <span className="panels-controls__check">{shown ? "x" : ""}</span>
+                {PANEL_TITLES[id]}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
-  const [layout, setLayout] = useState<MosaicNode<PanelId>>(loadLayout);
+  const [layout, setLayout] = useState<MosaicNode<PanelId> | null>(loadLayout);
   // True while a mosaic tile is being dragged by its header. We use it to drop
   // pointer events on tile content (the preview iframe / Monaco) for the
   // duration of the drag -- otherwise those heavy children swallow the native
@@ -466,8 +581,8 @@ function App() {
   );
 
   // Persist the tile layout so a rearranged/resized workspace survives reloads.
-  const onLayoutChange = useCallback((next: MosaicNode<PanelId> | null) => {
-    if (!next) return;
+  // Accepts null (all panels hidden) -- stored as-is so the empty state sticks.
+  const applyLayout = useCallback((next: MosaicNode<PanelId> | null) => {
     setLayout(next);
     try {
       localStorage.setItem(LAYOUT_KEY, JSON.stringify(next));
@@ -475,6 +590,27 @@ function App() {
       // Best-effort.
     }
   }, []);
+
+  // Panels currently in the tree; drives the menu checkmarks and last-panel lock.
+  const visiblePanels = getLeaves(layout);
+
+  const togglePanel = useCallback(
+    (id: PanelId) => {
+      const leaves = getLeaves(layout);
+      if (leaves.includes(id)) {
+        if (leaves.length <= 1) return; // never hide the last panel
+        applyLayout(removeLeaf(layout, id));
+      } else {
+        applyLayout(addLeaf(layout, id));
+      }
+    },
+    [layout, applyLayout],
+  );
+
+  const resetLayout = useCallback(
+    () => applyLayout(DEFAULT_LAYOUT),
+    [applyLayout],
+  );
 
   // Content shown in the editor for the active tab: the entry file uses `code`
   // (the preview source); any other open file uses its cached content.
@@ -520,20 +656,38 @@ function App() {
         onDragEnd={() => setIsDragging(false)}
         onDrop={() => setIsDragging(false)}
       >
-        <Mosaic<PanelId>
-          className=""
-          value={layout}
-          onChange={onLayoutChange}
-          renderTile={(id, path) => (
-            <MosaicWindow<PanelId>
-              path={path}
-              title={PANEL_TITLES[id]}
-              toolbarControls={<></>}
-            >
-              {renderPanel(id)}
-            </MosaicWindow>
-          )}
+        <PanelsControls
+          visible={visiblePanels}
+          onToggle={togglePanel}
+          onReset={resetLayout}
         />
+        {layout ? (
+          <Mosaic<PanelId>
+            className=""
+            value={layout}
+            onChange={applyLayout}
+            renderTile={(id, path) => (
+              <MosaicWindow<PanelId>
+                path={path}
+                title={PANEL_TITLES[id]}
+                toolbarControls={<></>}
+              >
+                {renderPanel(id)}
+              </MosaicWindow>
+            )}
+          />
+        ) : (
+          <div className="panels-empty">
+            <p className="panels-empty__text">All panels are hidden.</p>
+            <button
+              type="button"
+              className="panels-empty__btn"
+              onClick={resetLayout}
+            >
+              Reset layout
+            </button>
+          </div>
+        )}
       </div>
       <StatusBar />
 
