@@ -281,10 +281,48 @@ body,
   box-shadow: 0 0 0 1px #3b82f6;
 }
 
-/* Drop-target preview while dragging a tile. */
+/* Drop-target preview while dragging a tile.
+   react-mosaic renders 5 zones (left/right/top/bottom + center) on the hovered
+   tile; stock CSS keeps each at opacity:0 and flips only the zone under the
+   cursor to opacity:1. So the user normally sees, at most, one faint region.
+   We (a) faintly hint the four edge zones while a drag is in progress so the
+   candidate dock regions are visible up front, and (b) paint the active
+   (hovered) zone as a strong, high-contrast preview of exactly where the panel
+   will land. The edge zones grow 30% -> 50% on hover; transitioning the inset
+   positions animates that as a smooth "snap into place" preview. */
 .mosaic-dark .drop-target-container .drop-target {
-  background: rgba(59, 130, 246, 0.2);
-  border: 2px solid rgba(59, 130, 246, 0.6);
+  background: rgba(59, 130, 246, 0.08);
+  border: 2px dashed rgba(96, 165, 250, 0.35);
+  border-radius: 4px;
+  transition:
+    opacity 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    top 120ms ease,
+    right 120ms ease,
+    bottom 120ms ease,
+    left 120ms ease;
+}
+
+/* Hint the four edge zones during a drag; the full-tile center zone stays
+   hidden until hovered so it does not blanket the others. */
+.mosaic-dark .drop-target-container.-dragging .drop-target.left,
+.mosaic-dark .drop-target-container.-dragging .drop-target.right,
+.mosaic-dark .drop-target-container.-dragging .drop-target.top,
+.mosaic-dark .drop-target-container.-dragging .drop-target.bottom {
+  opacity: 0.55;
+}
+
+/* Active zone: an obvious, high-contrast preview of the new area. */
+.mosaic-dark .drop-target-container .drop-target.drop-target-hover {
+  opacity: 1;
+  background: rgba(59, 130, 246, 0.32);
+  border: 2px solid #60a5fa;
+  box-shadow:
+    inset 0 0 0 1px rgba(147, 197, 253, 0.6),
+    inset 0 0 24px rgba(59, 130, 246, 0.35),
+    0 0 0 1px rgba(96, 165, 250, 0.5);
 }
 
 .mosaic-dark .mosaic-window-additional-actions-bar {
