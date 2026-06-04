@@ -5,3 +5,4 @@ Patterns and idioms *this specific repo* follows -- how code is structured, name
 | Note | Summary | Status |
 |---|---|---|
 | [panel-layout-shell](panel-layout-shell.md) | The 3-panel layout owns sizing via .panel-slot wrappers in App.tsx; panel components fill their slot, not set their own width. | current |
+| [panel-state-via-parent-props](panel-state-via-parent-props.md) | Cross-panel data flows through the parent via props/callbacks (ChatPanel onCodeGenerated, CodePanel code/onCodeChange), not custom DOM events; uiStore.isGenerating is the legit shared signal. | current |

@@ -1,0 +1,236 @@
+/* ChatPanel: scrolling message list over a fixed composer. The base .panel is a
+   flex row; the chat panel stacks vertically. */
+.panel--chat.chatpanel {
+  flex-direction: column;
+}
+
+.chatpanel__messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chatpanel__empty {
+  margin: auto;
+  color: #6b7178;
+  font-size: 13px;
+  text-align: center;
+  padding: 0 24px;
+}
+
+/* --- Message bubbles --- */
+.msg {
+  display: flex;
+  max-width: 100%;
+}
+
+.msg--user {
+  justify-content: flex-end;
+}
+
+.msg--assistant {
+  justify-content: flex-start;
+}
+
+.msg__bubble {
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.msg--user .msg__bubble {
+  background: #3b82f6;
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.msg--assistant .msg__bubble {
+  background: #2a2a2a;
+  color: #e6e6e6;
+  border-bottom-left-radius: 4px;
+}
+
+.msg__text {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.msg__text + .msg__text,
+.msg__markdown > * + * {
+  margin-top: 8px;
+}
+
+.msg__text--plain {
+  white-space: pre-wrap;
+}
+
+.msg__inline-code {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.msg__code-block {
+  margin: 0;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 8px 10px;
+  overflow-x: auto;
+}
+
+.msg__code-block code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: #d4d4d4;
+  white-space: pre;
+}
+
+/* Streaming caret on the live assistant bubble. */
+.msg__caret {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: #9aa0a6;
+  animation: chatpanel-blink 1s steps(2, start) infinite;
+}
+
+@keyframes chatpanel-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+/* Animated "thinking" ellipsis shown before the first token. */
+.chatpanel__ellipsis {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  height: 14px;
+}
+
+.chatpanel__ellipsis span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #9aa0a6;
+  animation: chatpanel-bounce 1.2s infinite ease-in-out;
+}
+
+.chatpanel__ellipsis span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.chatpanel__ellipsis span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes chatpanel-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+/* --- Error banner --- */
+.chatpanel__error {
+  flex: 0 0 auto;
+  margin: 0 12px 8px;
+  padding: 8px 10px;
+  background: rgba(220, 38, 38, 0.12);
+  border: 1px solid rgba(220, 38, 38, 0.4);
+  border-radius: 6px;
+  color: #f1a1a1;
+  font-size: 12px;
+  word-break: break-word;
+}
+
+/* --- Composer --- */
+.chatpanel__composer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid #2a2a2a;
+  background: #202020;
+}
+
+.chatpanel__input {
+  flex: 1 1 auto;
+  resize: none;
+  min-height: 36px;
+  max-height: 160px;
+  padding: 8px 10px;
+  border: 1px solid #3a3a3a;
+  border-radius: 8px;
+  background: #1a1a1a;
+  color: #f6f6f6;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  outline: none;
+}
+
+.chatpanel__input:focus {
+  border-color: #3b82f6;
+}
+
+.chatpanel__input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.chatpanel__btn {
+  flex: 0 0 auto;
+  appearance: none;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease, opacity 0.12s ease;
+}
+
+.chatpanel__btn--send {
+  background: #3b82f6;
+  color: #fff;
+}
+
+.chatpanel__btn--send:hover {
+  background: #2f6fe0;
+}
+
+.chatpanel__btn--send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chatpanel__btn--stop {
+  background: #3a3a3a;
+  color: #f6f6f6;
+  border: 1px solid #4a4a4a;
+}
+
+.chatpanel__btn--stop:hover {
+  background: #444;
+}
