@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      CSP for the preview sandbox (charm T-026).
+
+      The iframe is mounted sandboxed with `allow-scripts` only (no `allow-same-origin`),
+      so its document runs on an OPAQUE origin. That means `script-src 'self'` can never
+      match anything (there is no real origin to be "self"), so the runtime is delivered
+      as inline <script> blocks (PreviewPanel injects them via srcdoc) -- hence
+      'unsafe-inline'. The COMPILED user animation is still injected via a blob: URL
+      <script>, never eval()/new Function(). connect-src 'none' means the sandbox cannot
+      reach the network: no exfiltration, fully offline.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'"
+    />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+      }
+      #root {
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <!--
+      PreviewPanel replaces this token with inline <script> blocks for
+      react.production.min.js, react-dom.production.min.js, and preview-runtime.js
+      (all shipped locally as Tauri resources; no CDN). They expose window.React,
+      window.ReactDOM, and window.RemotionRuntime.
+    -->
+    <!--RUNTIME-->
+
+    <script>
+      (function () {
+        "use strict";
+
+        // Composition format: 9:16 vertical short-form video.
+        var COMPOSITION = {
+          durationInFrames: 150,
+          fps: 30,
+          compositionWidth: 1080,
+          compositionHeight: 1920,
+        };
+
+        var playerRef = null;
+        var root = null;
+        // Render props that are NOT controllable via the player ref -- changing speed or
+        // loop means re-rendering the Player with new props.
+        var renderState = {
+          Component: null,
+          playbackRate: 1,
+          loop: false,
+        };
+
+        function post(msg) {
+          parent.postMessage(msg, "*");
+        }
+
+        function renderPlayer() {
+          if (!renderState.Component || !root) return;
+          root.render(
+            window.React.createElement(window.RemotionRuntime.Player, {
+              component: renderState.Component,
+              durationInFrames: COMPOSITION.durationInFrames,
+              fps: COMPOSITION.fps,
+              compositionWidth: COMPOSITION.compositionWidth,
+              compositionHeight: COMPOSITION.compositionHeight,
+              playbackRate: renderState.playbackRate,
+              loop: renderState.loop,
+              controls: false,
+              clickToPlay: false,
+              doubleClickToFullscreen: false,
+              style: { width: "100%", height: "100%" },
+              ref: function (r) {
+                playerRef = r;
+              },
+            }),
+          );
+        }
+
+        // Inject the compiled animation IIFE as a blob-URL <script> (NOT eval) so we never
+        // need CSP 'unsafe-eval'. It assigns window.AnimationExports.
+        function runBundle(code) {
+          return new Promise(function (resolve, reject) {
+            var blob = new Blob([code], { type: "text/javascript" });
+            var url = URL.createObjectURL(blob);
+            var s = document.createElement("script");
+            s.src = url;
+            s.onload = function () {
+              URL.revokeObjectURL(url);
+              resolve();
+            };
+            s.onerror = function () {
+              URL.revokeObjectURL(url);
+              reject(new Error("Failed to execute compiled animation bundle."));
+            };
+            document.head.appendChild(s);
+          });
+        }
+
+        window.addEventListener("message", function (event) {
+          var data = event.data || {};
+
+          if (data.type === "render") {
+            (async function () {
+              try {
+                if (!window.React || !window.ReactDOM || !window.RemotionRuntime) {
+                  throw new Error("Preview runtime failed to load.");
+                }
+                // Fresh global before each run so a failed compile can't leave a stale component.
+                window.AnimationExports = undefined;
+                await runBundle(data.bundle);
+
+                var exported = window.AnimationExports;
+                var Component = exported && (exported.default || exported.Main);
+                if (typeof Component !== "function") {
+                  throw new Error(
+                    "Animation must `export default` a React component.",
+                  );
+                }
+
+                renderState.Component = Component;
+                if (!root) {
+                  root = window.ReactDOM.createRoot(document.getElementById("root"));
+                }
+                renderPlayer();
+                post({ type: "renderOk" });
+              } catch (err) {
+                post({
+                  type: "renderError",
+                  message: err && err.message ? err.message : String(err),
+                });
+              }
+            })();
+            return;
+          }
+
+          if (data.type === "play") {
+            if (playerRef) playerRef.play();
+          } else if (data.type === "pause") {
+            if (playerRef) playerRef.pause();
+          } else if (data.type === "seek") {
+            if (playerRef) playerRef.seekTo(data.frame);
+          } else if (data.type === "setSpeed") {
+            renderState.playbackRate = data.speed;
+            renderPlayer();
+          } else if (data.type === "setLoop") {
+            renderState.loop = !!data.loop;
+            renderPlayer();
+          }
+        });
+
+        // Stream the current frame to the parent for the timeline/replay UI.
+        var lastFrame = -1;
+        var lastPlaying = null;
+        (function tick() {
+          if (playerRef) {
+            var frame = playerRef.getCurrentFrame();
+            var playing = playerRef.isPlaying();
+            if (frame !== lastFrame || playing !== lastPlaying) {
+              lastFrame = frame;
+              lastPlaying = playing;
+              post({
+                type: "frameUpdate",
+                frame: frame,
+                totalFrames: COMPOSITION.durationInFrames,
+                isPlaying: playing,
+              });
+            }
+          }
+          requestAnimationFrame(tick);
+        })();
+
+        // Tell the parent the sandbox shell is ready to receive a render.
+        post({ type: "sandboxReady" });
+      })();
+    </script>
+  </body>
+</html>
