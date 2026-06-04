@@ -131,6 +131,11 @@ type SandboxMessage =
 // DEFAULT_FPS in sandbox-frame.html.
 const DEFAULT_FPS = 30;
 
+// How long to wait for a compile+render round-trip before declaring the preview
+// stuck. Generous enough to cover the first-compile esbuild-wasm init + iframe load,
+// short enough that a real hang surfaces a Retry instead of an endless spinner.
+const WATCHDOG_MS = 5000;
+
 interface PreviewPanelProps {
   /** Current animation source, owned by the parent (App). Empty/undefined before a
    *  project is open -> falls back to SAMPLE_CODE so the preview is never blank. */
@@ -144,6 +149,9 @@ function PreviewPanel({ code }: PreviewPanelProps) {
   const source = code && code.trim().length > 0 ? code : SAMPLE_CODE;
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  // Shown alongside the timeout error: lets the user re-kick a compile when the
+  // watchdog gave up (see startCompile below).
+  const [canRetry, setCanRetry] = useState(false);
   // Mirrors the sandbox's playback state, read passively from `frameUpdate` events.
   // Drives "auto-off on play": the safe-zone overlay hides while the animation runs.
   // ReplayControls (T-030) owns the actual playback commands; we only listen.
@@ -167,9 +175,46 @@ function PreviewPanel({ code }: PreviewPanelProps) {
   const pendingBundleRef = useRef<string | null>(null);
   const sandboxReadyRef = useRef(false);
 
+  // Monotonic compile generation. Every source change (or retry) bumps it and tags
+  // the worker `compile` with it, so a late reply for superseded code can be ignored
+  // and can't clear/leave-set the loading state for the wrong generation.
+  const generationRef = useRef(0);
+  // Watchdog timer for the current generation. If neither renderOk/renderError nor a
+  // worker error arrives in time, it clears the stuck "Compiling preview..." overlay.
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const postToSandbox = useCallback((msg: unknown) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
   }, []);
+
+  const clearWatchdog = useCallback(() => {
+    if (watchdogRef.current !== null) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+  }, []);
+
+  // Start (or retry) a compile for the current source: bump the generation, reset
+  // loading/error, post the tagged compile, and arm the watchdog. A compile+render
+  // round-trip is normally well under a second; if nothing terminal arrives within
+  // WATCHDOG_MS something hung (e.g. the compiler or sandbox never replied), so we
+  // surface a timeout with a Retry instead of spinning forever.
+  const startCompile = useCallback(() => {
+    clearWatchdog();
+    const gen = ++generationRef.current;
+    setError(null);
+    setCanRetry(false);
+    setIsLoading(true);
+    workerRef.current?.postMessage({ type: "compile", code: source, id: gen });
+    watchdogRef.current = setTimeout(() => {
+      watchdogRef.current = null;
+      setIsLoading(false);
+      setError(
+        "Preview timed out -- the compiler or renderer did not respond.",
+      );
+      setCanRetry(true);
+    }, WATCHDOG_MS);
+  }, [source, clearWatchdog]);
 
   // --- Worker: TSX -> compiled IIFE -------------------------------------------------
   useEffect(() => {
@@ -181,18 +226,25 @@ function PreviewPanel({ code }: PreviewPanelProps) {
 
     worker.onmessage = (ev: MessageEvent<WorkerMessage>) => {
       const data = ev.data;
+      // Ignore replies for a superseded generation -- a newer source change has
+      // already bumped the generation and posted its own compile.
+      if (typeof data.id === "number" && data.id !== generationRef.current) return;
       if (data.type === "compiled") {
         setError(null);
         pendingBundleRef.current = data.bundle;
         if (sandboxReadyRef.current) {
           postToSandbox({ type: "render", bundle: data.bundle });
         }
+        // Don't clear the watchdog yet -- the round-trip isn't done until the
+        // sandbox reports renderOk/renderError.
       } else if (data.type === "error") {
+        clearWatchdog();
         setError(data.message);
         setIsLoading(false);
       }
     };
     worker.onerror = (ev) => {
+      clearWatchdog();
       setError(ev.message || "Compiler worker crashed.");
       setIsLoading(false);
     };
@@ -201,7 +253,7 @@ function PreviewPanel({ code }: PreviewPanelProps) {
       worker.terminate();
       workerRef.current = null;
     };
-  }, [postToSandbox]);
+  }, [postToSandbox, clearWatchdog]);
 
   // --- Sandbox iframe -> parent messages --------------------------------------------
   useEffect(() => {
@@ -217,9 +269,12 @@ function PreviewPanel({ code }: PreviewPanelProps) {
           postToSandbox({ type: "render", bundle: pendingBundleRef.current });
         }
       } else if (data.type === "renderOk") {
+        clearWatchdog();
         setError(null);
+        setCanRetry(false);
         setIsLoading(false);
       } else if (data.type === "renderError") {
+        clearWatchdog();
         setError(data.message);
         setIsLoading(false);
       } else if (data.type === "frameUpdate") {
@@ -234,13 +289,15 @@ function PreviewPanel({ code }: PreviewPanelProps) {
 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [postToSandbox]);
+  }, [postToSandbox, clearWatchdog]);
 
   // --- Compile whenever the code changes --------------------------------------------
+  // startCompile's identity changes with `source`, so this re-fires on every edit;
+  // the cleanup cancels any in-flight watchdog on change and on unmount.
   useEffect(() => {
-    setIsLoading(true);
-    workerRef.current?.postMessage({ type: "compile", code: source });
-  }, [source]);
+    startCompile();
+    return clearWatchdog;
+  }, [startCompile, clearWatchdog]);
 
   // --- Fit the bezel (screen + chrome) into the container, preserving aspect --------
   useEffect(() => {
@@ -386,6 +443,26 @@ function PreviewPanel({ code }: PreviewPanelProps) {
             }}
           >
             {error}
+            {canRetry && (
+              <div style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  onClick={startCompile}
+                  style={{
+                    background: "#5a1616",
+                    color: "#ffd4d4",
+                    border: "1px solid #802",
+                    borderRadius: 4,
+                    padding: "4px 12px",
+                    fontSize: 12,
+                    fontFamily: "sans-serif",
+                    cursor: "pointer",
+                  }}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

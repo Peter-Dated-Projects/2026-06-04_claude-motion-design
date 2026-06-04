@@ -159,13 +159,19 @@ function ensureInit(): Promise<void> {
   return initPromise;
 }
 
-ctx.onmessage = async (ev: MessageEvent) => {
-  const data = ev.data as CompileRequest;
-  if (!data || data.type !== "compile") return;
+// esbuild-wasm with `worker:false` runs the transform on this single thread's one
+// wasm instance and is NOT safe for overlapping transform calls -- two in flight at
+// once can DEADLOCK, so the second `compile` never produces a `compiled`/`error`
+// reply and the preview overlay sticks forever. We therefore single-flight all
+// transforms: `pending` holds the latest unprocessed request and `processing`
+// guards the drain loop, so only one esbuild.transform ever runs at a time.
+let pending: CompileRequest | null = null;
+let processing = false;
 
+async function compileOne(req: CompileRequest): Promise<CompileResult> {
   try {
     await ensureInit();
-    const prepared = bindImportsToGlobals(data.code);
+    const prepared = bindImportsToGlobals(req.code);
     const result = await esbuild.transform(prepared, {
       loader: "tsx",
       format: "iife",
@@ -174,11 +180,36 @@ ctx.onmessage = async (ev: MessageEvent) => {
       jsxFactory: "React.createElement",
       jsxFragment: "React.Fragment",
     });
-    const msg: CompileResult = { type: "compiled", bundle: result.code, id: data.id };
-    ctx.postMessage(msg);
+    return { type: "compiled", bundle: result.code, id: req.id };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const msg: CompileResult = { type: "error", message, id: data.id };
-    ctx.postMessage(msg);
+    return { type: "error", message, id: req.id };
   }
+}
+
+async function drain(): Promise<void> {
+  if (processing) return;
+  processing = true;
+  try {
+    while (pending) {
+      const req = pending;
+      pending = null;
+      const result = await compileOne(req);
+      // Coalesce: if a newer compile arrived while this one ran, the result is
+      // stale -- skip posting it and let the loop process the latest request. The
+      // newest request is the only one whose result the UI still cares about.
+      if (pending) continue;
+      ctx.postMessage(result);
+    }
+  } finally {
+    processing = false;
+  }
+}
+
+ctx.onmessage = (ev: MessageEvent) => {
+  const data = ev.data as CompileRequest;
+  if (!data || data.type !== "compile") return;
+  // Overwrite any not-yet-started request: only the latest source matters.
+  pending = data;
+  void drain();
 };
