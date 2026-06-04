@@ -27,12 +27,6 @@ body,
   box-sizing: border-box;
 }
 
-/* Disable text selection while dragging a resize handle. */
-body.is-resizing {
-  cursor: col-resize;
-  user-select: none;
-}
-
 .app {
   height: 100vh;
   display: flex;
@@ -179,20 +173,11 @@ body.is-resizing {
   color: #ff7b72;
 }
 
-/* --- Panels --- */
+/* --- Panels (react-mosaic shell) --- */
 .panels {
   flex: 1 1 auto;
-  display: flex;
-  flex-direction: row;
+  position: relative;
   min-height: 0;
-}
-
-.panel-slot {
-  flex-grow: 0;
-  flex-shrink: 1;
-  min-width: 180px;
-  min-height: 0;
-  display: flex;
 }
 
 .panel {
@@ -201,10 +186,10 @@ body.is-resizing {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border-right: 1px solid #2a2a2a;
 }
 
-.panel--chat {
+.panel--chat,
+.panel--terminal {
   background: #1d1d1d;
 }
 
@@ -214,7 +199,6 @@ body.is-resizing {
 
 .panel--preview {
   background: #161616;
-  border-right: none;
 }
 
 .panel__placeholder {
@@ -224,18 +208,87 @@ body.is-resizing {
   letter-spacing: 0.02em;
 }
 
-/* --- Resize handles --- */
-.resize-handle {
-  flex: 0 0 6px;
-  cursor: col-resize;
-  background: transparent;
-  position: relative;
-  z-index: 1;
+/* --- Mosaic dark theme override -------------------------------------------- */
+/* react-mosaic ships a light theme by default; repaint the chrome (tile bg,
+   window header, splitter, drop preview) to the app's dark palette. */
+.mosaic-dark {
+  background: #161616;
 }
 
-.resize-handle:hover,
-body.is-resizing .resize-handle {
-  background: #3b82f6;
+.mosaic-dark .mosaic-root {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
+
+.mosaic-dark .mosaic-tile {
+  margin: 1px;
+}
+
+/* Each tile's body hosts a .panel section that should fill it. */
+.mosaic-dark .mosaic-window,
+.mosaic-dark .mosaic-window-body {
+  background: #1a1a1a;
+  display: flex;
+  flex-direction: column;
+}
+
+.mosaic-dark .mosaic-window-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.mosaic-dark .mosaic-window .panel {
+  flex: 1 1 auto;
+}
+
+/* Title bar = drag handle. */
+.mosaic-dark .mosaic-window-title {
+  color: #cfcfcf;
+  font-family: Inter, sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mosaic-dark .mosaic-window-toolbar {
+  background: #232323;
+  border-bottom: 1px solid #333;
+  box-shadow: none;
+  height: 30px;
+}
+
+.mosaic-dark .mosaic-window-controls {
+  display: none;
+}
+
+/* Splitter between tiles. */
+.mosaic-dark .mosaic-split {
+  background: transparent;
+}
+
+.mosaic-dark .mosaic-split:hover {
+  background: none;
+}
+
+.mosaic-dark .mosaic-split .mosaic-split-line {
+  box-shadow: 0 0 0 1px #2a2a2a;
+}
+
+.mosaic-dark .mosaic-split:hover .mosaic-split-line {
+  box-shadow: 0 0 0 1px #3b82f6;
+}
+
+/* Drop-target preview while dragging a tile. */
+.mosaic-dark .drop-target-container .drop-target {
+  background: rgba(59, 130, 246, 0.2);
+  border: 2px solid rgba(59, 130, 246, 0.6);
+}
+
+.mosaic-dark .mosaic-window-additional-actions-bar {
+  display: none;
 }
 
 /* --- Status bar --- */

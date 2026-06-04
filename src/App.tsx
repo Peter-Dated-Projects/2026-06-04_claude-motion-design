@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Mosaic, MosaicWindow, type MosaicNode } from "react-mosaic-component";
+import "react-mosaic-component/react-mosaic-component.css";
 import "./App.css";
 import Toolbar from "./components/layout/Toolbar";
 import StatusBar from "./components/layout/StatusBar";
@@ -10,11 +12,45 @@ import CodePanel from "./components/CodePanel/CodePanel";
 import PreviewPanel from "./components/PreviewPanel/PreviewPanel";
 import Onboarding, { type OnboardingPhase } from "./components/Onboarding";
 import Settings from "./components/Settings";
-import { useUIStore } from "./store/uiStore";
 import { useProjectStore } from "./store/projectStore";
 
-const MIN_PANEL_PX = 180;
 const LAST_PROJECT_KEY = "claude-motion:lastProject";
+
+// --- Mosaic panel shell ------------------------------------------------------
+// The three panels live as draggable tiles in a react-mosaic layout: grab a
+// tile's header to re-tile into any horizontal/vertical split, drag dividers to
+// resize. Replaces the old hand-rolled fixed-width resize logic.
+type PanelId = "terminal" | "editor" | "preview";
+
+const PANEL_TITLES: Record<PanelId, string> = {
+  terminal: "Claude",
+  editor: "Editor",
+  preview: "Preview",
+};
+
+const LAYOUT_KEY = "claude-motion:panelLayout";
+
+const DEFAULT_LAYOUT: MosaicNode<PanelId> = {
+  direction: "row",
+  first: "terminal",
+  second: {
+    direction: "row",
+    first: "editor",
+    second: "preview",
+    splitPercentage: 50,
+  },
+  splitPercentage: 33,
+};
+
+function loadLayout(): MosaicNode<PanelId> {
+  try {
+    const raw = localStorage.getItem(LAYOUT_KEY);
+    if (raw) return JSON.parse(raw) as MosaicNode<PanelId>;
+  } catch {
+    // Corrupt/absent layout falls back to the default.
+  }
+  return DEFAULT_LAYOUT;
+}
 
 // ---------------------------------------------------------------------------
 // Toasts (App-owned). Used for manual-save confirmation/errors (Cmd/Ctrl+S);
@@ -117,9 +153,7 @@ function ToastStack({
 }
 
 function App() {
-  const panelWidths = useUIStore((s) => s.panelWidths);
-  const setPanelWidths = useUIStore((s) => s.setPanelWidths);
-  const panelsRef = useRef<HTMLDivElement>(null);
+  const [layout, setLayout] = useState<MosaicNode<PanelId>>(loadLayout);
 
   const projects = useProjectStore((s) => s.projects);
   const activeProject = useProjectStore((s) => s.activeProject);
@@ -310,45 +344,29 @@ function App() {
     [createProject, pushToast],
   );
 
-  // Drag a handle that sits between panel `index` and panel `index + 1`.
-  // Only those two panels resize; their combined width is conserved so the
-  // other panel never shifts. Widths are stored as percentages.
-  const startDrag = useCallback(
-    (index: number) => (e: React.MouseEvent) => {
-      e.preventDefault();
-      const container = panelsRef.current;
-      if (!container) return;
+  // Persist the tile layout so a rearranged/resized workspace survives reloads.
+  const onLayoutChange = useCallback((next: MosaicNode<PanelId> | null) => {
+    if (!next) return;
+    setLayout(next);
+    try {
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify(next));
+    } catch {
+      // Best-effort.
+    }
+  }, []);
 
-      const containerWidth = container.getBoundingClientRect().width;
-      const minPct = (MIN_PANEL_PX / containerWidth) * 100;
-      const startX = e.clientX;
-      const startWidths = useUIStore.getState().panelWidths;
-      const combined = startWidths[index] + startWidths[index + 1];
-
-      const onMove = (move: MouseEvent) => {
-        const deltaPct = ((move.clientX - startX) / containerWidth) * 100;
-        let left = startWidths[index] + deltaPct;
-        // Clamp both panels to the minimum width.
-        left = Math.max(minPct, Math.min(combined - minPct, left));
-        const right = combined - left;
-
-        const next = [...startWidths] as [number, number, number];
-        next[index] = left;
-        next[index + 1] = right;
-        setPanelWidths(next);
-      };
-
-      const onUp = () => {
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
-        document.body.classList.remove("is-resizing");
-      };
-
-      document.body.classList.add("is-resizing");
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp);
+  const renderPanel = useCallback(
+    (id: PanelId) => {
+      switch (id) {
+        case "terminal":
+          return <TerminalPanel />;
+        case "editor":
+          return <CodePanel code={code} onCodeChange={handleCodeChange} />;
+        case "preview":
+          return <PreviewPanel code={code} />;
+      }
     },
-    [setPanelWidths],
+    [code, handleCodeChange],
   );
 
   return (
@@ -357,28 +375,21 @@ function App() {
         onOpenSettings={() => setSettingsOpen(true)}
         onNewProject={() => setNewProjectOpen(true)}
       />
-      <div className="panels" ref={panelsRef}>
-        <div className="panel-slot" style={{ flexBasis: `${panelWidths[0]}%` }}>
-          <TerminalPanel />
-        </div>
-        <div
-          className="resize-handle"
-          role="separator"
-          aria-orientation="vertical"
-          onMouseDown={startDrag(0)}
+      <div className="panels mosaic-dark">
+        <Mosaic<PanelId>
+          className=""
+          value={layout}
+          onChange={onLayoutChange}
+          renderTile={(id, path) => (
+            <MosaicWindow<PanelId>
+              path={path}
+              title={PANEL_TITLES[id]}
+              toolbarControls={<></>}
+            >
+              {renderPanel(id)}
+            </MosaicWindow>
+          )}
         />
-        <div className="panel-slot" style={{ flexBasis: `${panelWidths[1]}%` }}>
-          <CodePanel code={code} onCodeChange={handleCodeChange} />
-        </div>
-        <div
-          className="resize-handle"
-          role="separator"
-          aria-orientation="vertical"
-          onMouseDown={startDrag(1)}
-        />
-        <div className="panel-slot" style={{ flexBasis: `${panelWidths[2]}%` }}>
-          <PreviewPanel code={code} />
-        </div>
       </div>
       <StatusBar />
 
