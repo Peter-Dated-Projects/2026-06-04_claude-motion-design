@@ -35,6 +35,23 @@ const screenStyle: CSSProperties = {
   background: "#000",
 };
 
+// A rim drawn on TOP of the screen content so the device edge reads against black
+// (#000) preview content. It is a zero-layout overlay (position:absolute, inset:0,
+// pointer-events:none) so it changes none of the exported geometry and never
+// disturbs the safe-zone overlay's coordinate frame. The bezel renders at
+// composition size (1080x1920) then PreviewPanel CSS-scales it down to fit, so the
+// rim is sized generously in composition pixels to survive the scale-down instead
+// of vanishing to a sub-pixel hairline.
+const screenRimStyle: CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  borderRadius: 4,
+  border: "6px solid rgba(255,255,255,0.16)",
+  boxShadow:
+    "inset 0 0 0 2px rgba(0,0,0,0.7), inset 0 0 40px rgba(0,0,0,0.55)",
+  pointerEvents: "none",
+};
+
 interface PhoneBezelProps {
   children: ReactNode;
 }
@@ -46,7 +63,10 @@ interface PhoneBezelProps {
 function PhoneBezel({ children }: PhoneBezelProps) {
   return (
     <div style={outerStyle}>
-      <div style={screenStyle}>{children}</div>
+      <div style={screenStyle}>
+        {children}
+        <div style={screenRimStyle} aria-hidden />
+      </div>
     </div>
   );
 }
