@@ -11,4 +11,4 @@ the KB. See `CONTRIBUTING.md` before adding or editing a note.
 | [decisions](decisions/_index.md)       | 4 | What we chose and why |
 | [conventions](conventions/_index.md)   | 0 | Repo patterns and idioms |
 | [gotchas](gotchas/_index.md)           | 0 | Traps and non-obvious constraints |
-| [domain](domain/_index.md)             | 0 | Glossary of project terms |
+| [domain](domain/_index.md)             | 1 | Glossary of project terms |
