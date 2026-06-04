@@ -7,7 +7,7 @@ the KB. See `CONTRIBUTING.md` before adding or editing a note.
 
 | Root | Notes | What it holds |
 |---|---|---|
-| [architecture](architecture/_index.md) | 1 | How the system is built |
+| [architecture](architecture/_index.md) | 2 | How the system is built |
 | [decisions](decisions/_index.md)       | 1 | What we chose and why |
 | [conventions](conventions/_index.md)   | 0 | Repo patterns and idioms |
 | [gotchas](gotchas/_index.md)           | 0 | Traps and non-obvious constraints |
