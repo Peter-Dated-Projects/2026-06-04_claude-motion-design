@@ -1,26 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 import Toolbar from "./components/layout/Toolbar";
 import StatusBar from "./components/layout/StatusBar";
-import ChatPanel from "./components/ChatPanel/ChatPanel";
+import TerminalPanel from "./components/TerminalPanel/TerminalPanel";
 import CodePanel from "./components/CodePanel/CodePanel";
 import PreviewPanel from "./components/PreviewPanel/PreviewPanel";
 import Onboarding, { type OnboardingPhase } from "./components/Onboarding";
 import Settings from "./components/Settings";
 import { useUIStore } from "./store/uiStore";
 import { useProjectStore } from "./store/projectStore";
-import { useClaude } from "./hooks/useClaude";
 
 const MIN_PANEL_PX = 180;
 const LAST_PROJECT_KEY = "claude-motion:lastProject";
-const GENERATION_TIMEOUT_MS = 60_000;
 
 // ---------------------------------------------------------------------------
-// Toasts (App-owned). Used for the Claude edge cases the ticket calls out:
-// auth ("claude login"), network errors, generation timeout, and manual-save
-// confirmation.
+// Toasts (App-owned). Used for manual-save confirmation/errors (Cmd/Ctrl+S);
+// Claude auth/errors now surface inline in the embedded terminal.
 // ---------------------------------------------------------------------------
 type ToastKind = "success" | "error" | "warn";
 interface Toast {
@@ -154,29 +152,11 @@ function App() {
     [],
   );
 
-  // Generated code: mirror into the editor/preview state and persist immediately.
-  const handleCodeGenerated = useCallback((generated: string) => {
-    setCode(generated);
-    const slug = useProjectStore.getState().activeProject?.slug;
-    if (slug) invoke("save_animation", { slug, code: generated }).catch(() => {});
-  }, []);
-
-  const { messages, streamingText, isGenerating, isWaiting, error, send, cancel } =
-    useClaude({ onCodeGenerated: handleCodeGenerated });
-
-  // Refs so the global key handler / timeout read fresh values without re-binding.
+  // Ref so the global Cmd/Ctrl+S handler reads the latest code without re-binding.
   const codeRef = useRef(code);
-  const generatingRef = useRef(isGenerating);
-  const waitingRef = useRef(isWaiting);
   useEffect(() => {
     codeRef.current = code;
   }, [code]);
-  useEffect(() => {
-    generatingRef.current = isGenerating;
-  }, [isGenerating]);
-  useEffect(() => {
-    waitingRef.current = isWaiting;
-  }, [isWaiting]);
 
   // Editor edits: keep state in sync and auto-save (Monaco already debounces 500ms).
   const handleCodeChange = useCallback((next: string) => {
@@ -226,6 +206,32 @@ function App() {
     };
   }, [activeProject?.slug]);
 
+  // --- Watch animation.tsx on disk: it is the display source of truth ---------------
+  // Both the user (Monaco) and Claude (terminal) write this file; the backend
+  // file watcher emits its latest contents and we mirror them into `code`, which
+  // flows to the editor and preview. This replaces the old chat onCodeGenerated.
+  useEffect(() => {
+    const slug = activeProject?.slug;
+    if (!slug) return;
+
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+
+    void listen<{ code: string }>("animation://changed", (event) => {
+      setCode(event.payload.code);
+    }).then((un) => {
+      if (disposed) un();
+      else unlisten = un;
+    });
+
+    invoke("watch_animation", { slug }).catch(() => {});
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [activeProject?.slug]);
+
   // --- Window title + remember the last project -------------------------------------
   useEffect(() => {
     const title = activeProject?.name
@@ -244,8 +250,8 @@ function App() {
     }
   }, [activeProject?.slug, activeProject?.name]);
 
-  // --- Global shortcuts: Cmd/Ctrl+S save, Escape cancel -----------------------------
-  // (Cmd+Enter send lives in ChatPanel; Space play/pause lives in ReplayControls.)
+  // --- Global shortcut: Cmd/Ctrl+S save ---------------------------------------------
+  // (Space play/pause lives in ReplayControls.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) {
@@ -257,69 +263,11 @@ function App() {
           .catch((err) =>
             pushToast({ kind: "error", text: `Save failed: ${String(err)}` }),
           );
-      } else if (e.key === "Escape" && generatingRef.current) {
-        void cancel();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [cancel, pushToast]);
-
-  // --- Map Claude errors to actionable toasts ---------------------------------------
-  const lastErrorRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!error) {
-      lastErrorRef.current = null;
-      return;
-    }
-    if (error === lastErrorRef.current) return;
-    lastErrorRef.current = error;
-
-    const lc = error.toLowerCase();
-    if (
-      lc.includes("login") ||
-      lc.includes("logged in") ||
-      lc.includes("authenticat") ||
-      lc.includes("unauthor") ||
-      lc.includes("not authenticated")
-    ) {
-      pushToast({
-        kind: "error",
-        text: "Run `claude login` in your terminal to authenticate.",
-      });
-    } else if (
-      lc.includes("network") ||
-      lc.includes("connection") ||
-      lc.includes("econn") ||
-      lc.includes("timed out") ||
-      lc.includes("fetch") ||
-      lc.includes("dns") ||
-      lc.includes("offline")
-    ) {
-      pushToast({
-        kind: "error",
-        text: "Network error reaching Claude. Check your connection and try again.",
-      });
-    } else {
-      pushToast({ kind: "error", text: error });
-    }
-  }, [error, pushToast]);
-
-  // --- Generation timeout: warn (with Stop) if no token after 60s -------------------
-  useEffect(() => {
-    if (!isWaiting) return;
-    const id = window.setTimeout(() => {
-      if (generatingRef.current && waitingRef.current) {
-        pushToast({
-          kind: "warn",
-          text: "Claude has not responded for a while.",
-          action: { label: "Stop", onClick: () => void cancel() },
-          sticky: true,
-        });
-      }
-    }, GENERATION_TIMEOUT_MS);
-    return () => window.clearTimeout(id);
-  }, [isWaiting, cancel, pushToast]);
+  }, [pushToast]);
 
   // --- Onboarding / new-project modal decisioning -----------------------------------
   const needsFirstProject =
@@ -411,15 +359,7 @@ function App() {
       />
       <div className="panels" ref={panelsRef}>
         <div className="panel-slot" style={{ flexBasis: `${panelWidths[0]}%` }}>
-          <ChatPanel
-            messages={messages}
-            streamingText={streamingText}
-            isGenerating={isGenerating}
-            isWaiting={isWaiting}
-            onSend={(text) => void send(text)}
-            onCancel={() => void cancel()}
-            disabled={!activeProject}
-          />
+          <TerminalPanel />
         </div>
         <div
           className="resize-handle"

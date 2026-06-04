@@ -13,17 +13,19 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "zustand": "^4.5.5",
     "@monaco-editor/react": "^4.6.0",
     "@remotion/player": "^4.0.471",
-    "remotion": "^4.0.471",
-    "esbuild-wasm": "^0.25.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-fs": "^2",
     "@tauri-apps/plugin-shell": "^2",
-    "@tauri-apps/plugin-fs": "^2"
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "esbuild-wasm": "^0.25.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.471",
+    "zustand": "^4.5.5"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
