@@ -44,6 +44,8 @@ pub fn run() {
             commands::claude::invoke_claude,
             commands::claude::cancel_claude,
             commands::claude::check_claude_installed,
+            commands::claude::get_claude_cli,
+            commands::claude::set_claude_cli,
             commands::zip::export_project_zip,
             commands::zip::import_project_zip,
             commands::export::export_tsx,

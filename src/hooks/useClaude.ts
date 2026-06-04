@@ -59,6 +59,64 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+// ---------------------------------------------------------------------------
+// Lazy esbuild validation worker.
+//
+// Before generated code reaches the editor/preview, we run it through the same
+// sandbox compiler the preview uses (src/workers/sandbox-compiler.worker.ts) in
+// transform mode: a `compiled` reply means the TSX is structurally valid, an
+// `error` reply is a syntax/transform failure we can feed back to Claude. This
+// is a SECOND esbuild-wasm instance (the preview owns its own); it is created
+// lazily on the first validation so the ~12 MB wasm init is only paid once a
+// generation actually completes, never at app start.
+// ---------------------------------------------------------------------------
+type ValidationResult = { ok: true } | { ok: false; message: string };
+
+/** Maximum number of "code didn't compile, please fix" round-trips per request. */
+const MAX_VALIDATION_RETRIES = 2;
+
+let validationWorker: Worker | null = null;
+let validationSeq = 0;
+const pendingValidations = new Map<number, (r: ValidationResult) => void>();
+
+function getValidationWorker(): Worker {
+  if (!validationWorker) {
+    validationWorker = new Worker(
+      new URL("../workers/sandbox-compiler.worker.ts", import.meta.url),
+      { type: "module" },
+    );
+    validationWorker.onmessage = (ev: MessageEvent) => {
+      const data = ev.data as { type: string; message?: string; id?: number };
+      if (typeof data.id !== "number") return;
+      const resolve = pendingValidations.get(data.id);
+      if (!resolve) return;
+      pendingValidations.delete(data.id);
+      resolve(
+        data.type === "compiled"
+          ? { ok: true }
+          : { ok: false, message: data.message ?? "Unknown compile error" },
+      );
+    };
+    validationWorker.onerror = () => {
+      // If the validator itself crashes, fail OPEN (treat code as valid) rather
+      // than trap the user behind a broken gate; the preview still surfaces any
+      // real runtime error in its red banner.
+      for (const resolve of pendingValidations.values()) resolve({ ok: true });
+      pendingValidations.clear();
+    };
+  }
+  return validationWorker;
+}
+
+/** Transform-compile `code` to confirm it has no syntax/transform errors. */
+function validateCode(code: string): Promise<ValidationResult> {
+  return new Promise((resolve) => {
+    const id = ++validationSeq;
+    pendingValidations.set(id, resolve);
+    getValidationWorker().postMessage({ type: "compile", code, id });
+  });
+}
+
 export interface UseClaudeOptions {
   /**
    * Called with freshly generated animation code once a run finishes and a
@@ -105,6 +163,10 @@ export function useClaude(options: UseClaudeOptions = {}): UseClaude {
   // Hold the latest messages so event callbacks (registered once) read fresh data.
   const messagesRef = useRef<Message[]>([]);
   const onCodeGeneratedRef = useRef(onCodeGenerated);
+  // How many compile-fix retries the current request has already spent.
+  const retryCountRef = useRef(0);
+  // Latest active slug, read by the (re-)invoke inside the done handler.
+  const slugRef = useRef<string | null>(activeProject?.slug ?? null);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -114,6 +176,9 @@ export function useClaude(options: UseClaudeOptions = {}): UseClaude {
   }, [onCodeGenerated]);
 
   const slug = activeProject?.slug ?? null;
+  useEffect(() => {
+    slugRef.current = slug;
+  }, [slug]);
 
   // Keep the shared generating flag in sync so other panels (e.g. the code
   // editor's read-only overlay) react to in-flight runs.
@@ -161,6 +226,83 @@ export function useClaude(options: UseClaudeOptions = {}): UseClaude {
     const unlisteners: UnlistenFn[] = [];
     let disposed = false;
 
+    // Append the final assistant turn to the visible/persisted conversation.
+    const finalizeAssistant = (fullText: string) => {
+      const assistantMsg: Message = {
+        role: "assistant",
+        content: fullText,
+        timestamp: nowIso(),
+      };
+      const next = [...messagesRef.current, assistantMsg];
+      setMessages(next);
+      persistConversation(next);
+    };
+
+    // Handle a completed Claude turn: extract code, validate it, and either
+    // accept it, ask Claude to fix a compile error (up to MAX_VALIDATION_RETRIES),
+    // or give up and surface the broken code so the preview shows the real error.
+    const handleDone = async (payload: DonePayload) => {
+      const { full_text, session_id } = payload;
+      if (session_id) sessionIdRef.current = session_id;
+      setStreamingText("");
+      setIsWaiting(false);
+
+      const code = extractCode(full_text);
+      if (!code) {
+        // Conversational reply with no <code> block -> just finalize.
+        finalizeAssistant(full_text);
+        setGenerating(false);
+        retryCountRef.current = 0;
+        return;
+      }
+
+      const result = await validateCode(code);
+      if (result.ok) {
+        finalizeAssistant(full_text);
+        setGenerating(false);
+        retryCountRef.current = 0;
+        onCodeGeneratedRef.current?.(code);
+        return;
+      }
+
+      // Code did not compile. Ask Claude to fix it, up to the retry cap. The
+      // failed attempt is NOT shown as a chat bubble — only the terminal turn
+      // lands in the conversation; the live streaming bubble simply resets.
+      if (retryCountRef.current < MAX_VALIDATION_RETRIES && slugRef.current) {
+        retryCountRef.current += 1;
+        const fixPrompt =
+          "The TSX you returned does not compile. esbuild reported:\n" +
+          `<error>\n${result.message}\n</error>\n` +
+          "Return the COMPLETE corrected file in a single <code> tag, no prose.";
+        setStreamingText("");
+        setIsWaiting(true);
+        // generating stays true across the fix round-trip
+        try {
+          await invoke("invoke_claude", {
+            slug: slugRef.current,
+            prompt: fixPrompt,
+            sessionId: sessionIdRef.current,
+          });
+        } catch (e) {
+          setError(typeof e === "string" ? e : String(e));
+          setIsWaiting(false);
+          setGenerating(false);
+          retryCountRef.current = 0;
+        }
+        return;
+      }
+
+      // Retries exhausted: accept the last attempt anyway so the preview's red
+      // banner shows the actual compile error, and tell the user via `error`.
+      finalizeAssistant(full_text);
+      setGenerating(false);
+      retryCountRef.current = 0;
+      onCodeGeneratedRef.current?.(code);
+      setError(
+        `Generated code still failed to compile after ${MAX_VALIDATION_RETRIES} retries: ${result.message}`,
+      );
+    };
+
     const register = async () => {
       const onToken = await listen<TokenPayload>("claude://token", (event) => {
         setIsWaiting(false);
@@ -168,23 +310,7 @@ export function useClaude(options: UseClaudeOptions = {}): UseClaude {
       });
 
       const onDone = await listen<DonePayload>("claude://done", (event) => {
-        const { full_text, session_id } = event.payload;
-        if (session_id) sessionIdRef.current = session_id;
-
-        const assistantMsg: Message = {
-          role: "assistant",
-          content: full_text,
-          timestamp: nowIso(),
-        };
-        const next = [...messagesRef.current, assistantMsg];
-        setMessages(next);
-        setStreamingText("");
-        setIsWaiting(false);
-        setGenerating(false);
-        persistConversation(next);
-
-        const code = extractCode(full_text);
-        if (code) onCodeGeneratedRef.current?.(code);
+        void handleDone(event.payload);
       });
 
       const onError = await listen<ErrorPayload>("claude://error", (event) => {
@@ -192,6 +318,7 @@ export function useClaude(options: UseClaudeOptions = {}): UseClaude {
         setStreamingText("");
         setIsWaiting(false);
         setGenerating(false);
+        retryCountRef.current = 0;
       });
 
       if (disposed) {
@@ -220,6 +347,7 @@ export function useClaude(options: UseClaudeOptions = {}): UseClaude {
       }
 
       setError(null);
+      retryCountRef.current = 0;
 
       const userMsg: Message = {
         role: "user",

@@ -45,6 +45,32 @@ use tauri::{AppHandle, Emitter, Manager};
 pub const MCP_CONFIG_FILE: &str = "remotion-mcp-config.json";
 pub const SKILLS_FILE: &str = "remotion-skills.txt";
 
+/// Stores a user-supplied override for the `claude` binary (absolute path or a
+/// name on PATH). Absent / empty -> fall back to the default `claude`. Written
+/// by `set_claude_cli`, read by `claude_binary` / `get_claude_cli`.
+pub const CLI_PATH_FILE: &str = "cli-path.txt";
+
+/// Read the configured `claude` binary: the user override from `cli-path.txt`
+/// if present and non-empty, otherwise the default `"claude"` resolved on PATH.
+pub fn claude_binary(app: &AppHandle) -> String {
+    claude_path_override(app)
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or_else(|| "claude".to_string())
+}
+
+/// The raw override string the user saved, if any (trimmed). `None` when no
+/// override is set or the file is empty/unreadable.
+pub fn claude_path_override(app: &AppHandle) -> Option<String> {
+    let path = claude_config_dir(app).ok()?.join(CLI_PATH_FILE);
+    let contents = std::fs::read_to_string(path).ok()?;
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 // The resource files are embedded into the binary at compile time. `include_str!`
 // creates an implicit rebuild dependency, and build.rs adds explicit
 // `rerun-if-changed` directives for them as well.
@@ -153,7 +179,7 @@ impl ClaudeBridge {
         let mcp_config = config_dir.join(MCP_CONFIG_FILE);
         let skills = config_dir.join(SKILLS_FILE);
 
-        let mut cmd = Command::new("claude");
+        let mut cmd = Command::new(claude_binary(&app));
         cmd.arg("-p")
             .arg("--mcp-config")
             .arg(&mcp_config)

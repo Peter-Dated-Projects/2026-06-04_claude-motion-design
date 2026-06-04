@@ -13,6 +13,14 @@ interface SettingsProps {
   onClose: () => void;
 }
 
+// Mirrors the Rust `ClaudeCliInfo` returned by `get_claude_cli`.
+interface ClaudeCliInfo {
+  detected: string | null;
+  override_path: string | null;
+  effective: string;
+  available: boolean;
+}
+
 const OVERLAY: React.CSSProperties = {
   position: "fixed",
   inset: 0,
@@ -98,29 +106,75 @@ const REFRESH_BTN: React.CSSProperties = {
   marginLeft: 8,
 };
 
+const PATH_INPUT: React.CSSProperties = {
+  flex: 1,
+  background: "#1a1a1a",
+  color: "#f6f6f6",
+  border: "1px solid #3a3a3a",
+  borderRadius: 5,
+  padding: "5px 8px",
+  fontSize: 12,
+  fontFamily: "ui-monospace, monospace",
+};
+
+const SMALL_BTN: React.CSSProperties = {
+  background: "#2e2e2e",
+  color: "#f6f6f6",
+  border: "1px solid #3a3a3a",
+  borderRadius: 5,
+  padding: "5px 10px",
+  fontSize: 12,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
 function Settings({ open, onClose }: SettingsProps) {
-  const [claudeInstalled, setClaudeInstalled] = useState<boolean | null>(null);
+  const [cli, setCli] = useState<ClaudeCliInfo | null>(null);
+  const [overrideInput, setOverrideInput] = useState("");
   const [checking, setChecking] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [version, setVersion] = useState<string>("");
   const [skillsPath, setSkillsPath] = useState<string>("");
   const [mcpPath, setMcpPath] = useState<string>("");
 
-  const recheckClaude = useCallback(async () => {
+  const recheckClaude = useCallback(async (syncInput = false) => {
     setChecking(true);
     try {
-      setClaudeInstalled(await invoke<boolean>("check_claude_installed"));
+      const info = await invoke<ClaudeCliInfo>("get_claude_cli");
+      setCli(info);
+      // Only reseed the editable field when (re)opening, not after every check,
+      // so it doesn't clobber what the user is typing.
+      if (syncInput) setOverrideInput(info.override_path ?? "");
     } catch {
-      setClaudeInstalled(false);
+      setCli(null);
     } finally {
       setChecking(false);
     }
   }, []);
 
+  // Persist (or clear, with an empty string) the CLI override, then re-check so
+  // the detected/effective/available readout reflects the new binary.
+  const saveOverride = useCallback(
+    async (next: string | null) => {
+      setSaving(true);
+      try {
+        await invoke("set_claude_cli", { path: next });
+        setOverrideInput(next ?? "");
+        await recheckClaude(false);
+      } catch {
+        // Leave the field as-is; the readout simply won't change.
+      } finally {
+        setSaving(false);
+      }
+    },
+    [recheckClaude],
+  );
+
   // Load diagnostics each time the panel opens, so a freshly installed CLI or a
   // login change is reflected without restarting the app.
   useEffect(() => {
     if (!open) return;
-    void recheckClaude();
+    void recheckClaude(true);
     getVersion()
       .then(setVersion)
       .catch(() => setVersion("unknown"));
@@ -148,10 +202,12 @@ function Settings({ open, onClose }: SettingsProps) {
 
   if (!open) return null;
 
-  const claudeOk = claudeInstalled === true;
+  const claudeOk = cli?.available === true;
   // The Remotion docs MCP is wired through the CLI, so its reachability tracks the
   // CLI being available; the config itself is always bundled.
   const mcpOk = claudeOk;
+  const trimmedOverride = overrideInput.trim();
+  const overrideDirty = trimmedOverride !== (cli?.override_path ?? "");
 
   return (
     <div
@@ -175,20 +231,66 @@ function Settings({ open, onClose }: SettingsProps) {
           <span style={LABEL}>Claude CLI</span>
           <span style={VALUE}>
             <span style={dot(claudeOk)} />
-            {claudeInstalled === null
+            {cli === null
               ? "Checking..."
               : claudeOk
-                ? "Available on PATH (claude)"
-                : "Not found on PATH"}
+                ? `Runnable: ${cli.effective}`
+                : `Not runnable: ${cli.effective}`}
             <button
               type="button"
               style={REFRESH_BTN}
               disabled={checking}
-              onClick={() => void recheckClaude()}
+              onClick={() => void recheckClaude(false)}
             >
               {checking ? "..." : "Re-check"}
             </button>
           </span>
+          <span style={{ ...LABEL, textTransform: "none", marginTop: 6 }}>
+            Auto-detected (which claude):{" "}
+            <span style={{ fontFamily: "ui-monospace, monospace", color: "#cfcfcf" }}>
+              {cli === null ? "..." : cli.detected ?? "not found on PATH"}
+            </span>
+          </span>
+          <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}>
+            <input
+              style={PATH_INPUT}
+              type="text"
+              spellCheck={false}
+              placeholder="Override path (leave blank to use PATH)"
+              value={overrideInput}
+              onChange={(e) => setOverrideInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && overrideDirty && !saving) {
+                  e.preventDefault();
+                  void saveOverride(trimmedOverride || null);
+                }
+              }}
+            />
+            <button
+              type="button"
+              style={{
+                ...SMALL_BTN,
+                opacity: overrideDirty && !saving ? 1 : 0.6,
+                cursor: overrideDirty && !saving ? "pointer" : "default",
+              }}
+              disabled={!overrideDirty || saving}
+              onClick={() => void saveOverride(trimmedOverride || null)}
+            >
+              {saving ? "..." : "Save"}
+            </button>
+            <button
+              type="button"
+              style={{
+                ...SMALL_BTN,
+                opacity: cli?.override_path && !saving ? 1 : 0.6,
+                cursor: cli?.override_path && !saving ? "pointer" : "default",
+              }}
+              disabled={!cli?.override_path || saving}
+              onClick={() => void saveOverride(null)}
+            >
+              Clear
+            </button>
+          </div>
         </div>
 
         <div style={ROW}>
