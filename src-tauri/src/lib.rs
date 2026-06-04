@@ -1,6 +1,11 @@
-// Crate root. The Claude bridge lives at the top level (commands/claude.rs reaches
-// it via `crate::claude_bridge`); the command modules are grouped under `commands`.
+// Crate root. The Claude config/path helpers live at the top level
+// (commands/claude.rs, pty_bridge.rs and file_watch.rs reach them via
+// `crate::claude_bridge`); the command modules are grouped under `commands`.
 mod claude_bridge;
+// Interactive Claude CLI over a PTY, plus the animation.tsx file watcher that
+// keeps the editor/preview in sync with what Claude writes in the terminal.
+mod file_watch;
+mod pty_bridge;
 
 // Inline module tree -> resolves to src/commands/<name>.rs without a mod.rs.
 mod commands {
@@ -22,8 +27,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
-        // Single serialized Claude CLI bridge, shared across invoke_claude/cancel_claude.
-        .manage(commands::claude::ClaudeState::default())
+        // Single interactive Claude PTY session + single animation.tsx watcher.
+        .manage(pty_bridge::PtyState::default())
+        .manage(file_watch::WatchState::default())
         // On startup, materialize the bundled MCP config + skills prompt into the app
         // config dir so the Claude bridge can point the CLI at real files.
         .setup(|app| {
@@ -41,11 +47,14 @@ pub fn run() {
             commands::projects::load_animation,
             commands::projects::save_conversation,
             commands::projects::load_conversation,
-            commands::claude::invoke_claude,
-            commands::claude::cancel_claude,
             commands::claude::check_claude_installed,
             commands::claude::get_claude_cli,
             commands::claude::set_claude_cli,
+            pty_bridge::terminal_open,
+            pty_bridge::terminal_input,
+            pty_bridge::terminal_resize,
+            pty_bridge::terminal_close,
+            file_watch::watch_animation,
             commands::zip::export_project_zip,
             commands::zip::import_project_zip,
             commands::export::export_tsx,

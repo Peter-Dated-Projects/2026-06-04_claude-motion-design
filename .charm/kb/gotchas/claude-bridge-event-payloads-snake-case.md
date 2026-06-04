@@ -2,11 +2,20 @@
 id: claude-bridge-event-payloads-snake-case
 root: gotchas
 type: gotcha
-status: current
-summary: "Claude bridge event payloads (claude://done etc.) are snake_case (full_text/session_id/cost_usd) — those Rust structs lack #[serde(rename_all)], unlike Project/Message which are camelCase; and no command persists session_id alone."
+status: superseded
+related: 0001-embedded-interactive-claude-pty
+summary: "SUPERSEDED (print-mode removed). The claude://token|done|error events no longer exist; the new terminal://data|exit and animation://changed payloads are also plain snake_case (no serde rename)."
 created: 2026-06-04
 updated: 2026-06-04
 ---
+
+> **Superseded by [[0001-embedded-interactive-claude-pty]].** The
+> `claude://token|done|error` events and `invoke_claude` described here were
+> removed with the print-mode bridge. The convention that bridge event payloads
+> are plain snake_case (no `#[serde(rename_all)]`) still holds for the new
+> `terminal://data {data}`, `terminal://exit {code}`, and
+> `animation://changed {code}` events. Historical detail below.
+
 
 Two related traps when consuming the Claude CLI bridge from the frontend.
 

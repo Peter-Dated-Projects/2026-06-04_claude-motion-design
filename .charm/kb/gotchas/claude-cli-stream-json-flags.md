@@ -2,11 +2,18 @@
 id: claude-cli-stream-json-flags
 root: gotchas
 type: gotcha
-status: current
-summary: "`claude -p --output-format stream-json` requires `--verbose`, and incremental text_delta tokens only appear with `--include-partial-messages` — neither was in the ticket's literal arg list but both are mandatory for token streaming."
+status: superseded
+related: 0001-embedded-interactive-claude-pty
+summary: "SUPERSEDED (print-mode removed). `claude -p --output-format stream-json` requires `--verbose`, and incremental text_delta tokens only appear with `--include-partial-messages`."
 created: 2026-06-04
 updated: 2026-06-04
 ---
+
+> **Superseded by [[0001-embedded-interactive-claude-pty]].** The headless
+> `claude -p` NDJSON bridge this note describes has been removed in favor of an
+> embedded interactive PTY session. Kept for historical context; the flags below
+> no longer apply to this codebase.
+
 
 The Claude CLI bridge (T-022) streams the `claude` CLI's NDJSON output. The arg list
 in the ticket/PLAN was `claude -p --mcp-config ... --append-system-prompt-file ...
