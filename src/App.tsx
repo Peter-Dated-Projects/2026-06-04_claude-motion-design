@@ -8,11 +8,13 @@ import "./App.css";
 import Toolbar from "./components/layout/Toolbar";
 import StatusBar from "./components/layout/StatusBar";
 import TerminalPanel from "./components/TerminalPanel/TerminalPanel";
-import CodePanel from "./components/CodePanel/CodePanel";
+import CodePanel, { ENTRY_FILE } from "./components/CodePanel/CodePanel";
 import PreviewPanel from "./components/PreviewPanel/PreviewPanel";
 import Onboarding, { type OnboardingPhase } from "./components/Onboarding";
 import Settings from "./components/Settings";
 import { useProjectStore } from "./store/projectStore";
+import { useUIStore } from "./store/uiStore";
+import type { ProjectFile } from "./types";
 
 const LAST_PROJECT_KEY = "claude-motion:lastProject";
 
@@ -162,7 +164,17 @@ function App() {
   const createProject = useProjectStore((s) => s.createProject);
 
   // Current animation source, owned here and fed to both the editor and preview.
+  // animation.tsx (ENTRY_FILE) is the one file the preview renders; its content
+  // lives in `code` and is mirrored from disk by the watcher.
   const [code, setCode] = useState("");
+  // The project's source tree (file-tree rail) and the loaded content of any
+  // non-entry files the user has opened in a tab.
+  const [files, setFiles] = useState<ProjectFile[]>([]);
+  const [fileContents, setFileContents] = useState<Record<string, string>>({});
+
+  const activeFile = useUIStore((s) => s.activeFile);
+  const resetEditorFiles = useUIStore((s) => s.resetEditorFiles);
+
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [claudeInstalled, setClaudeInstalled] = useState<boolean | null>(null);
@@ -206,6 +218,30 @@ function App() {
         );
     },
     [pushToast],
+  );
+
+  // Route a debounced editor change to the right file. The entry file flows
+  // through handleCodeChange (which also feeds the preview); any other file is
+  // saved by path via write_file. Non-entry edits do NOT yet affect the preview
+  // -- the sandbox compiler still bundles only animation.tsx.
+  const handleContentChange = useCallback(
+    (next: string) => {
+      const slug = useProjectStore.getState().activeProject?.slug;
+      const path = useUIStore.getState().activeFile;
+      if (!slug || !path) return;
+      if (path === ENTRY_FILE) {
+        handleCodeChange(next);
+        return;
+      }
+      setFileContents((prev) => ({ ...prev, [path]: next }));
+      invoke("write_file", { slug, path, contents: next }).catch((err) =>
+        pushToast({
+          kind: "error",
+          text: `Couldn't save ${path}: ${String(err)}`,
+        }),
+      );
+    },
+    [handleCodeChange, pushToast],
   );
 
   // --- Startup: check the CLI, load projects, reopen the last one -------------------
@@ -259,6 +295,60 @@ function App() {
       cancelled = true;
     };
   }, [activeProject?.slug, pushToast]);
+
+  // --- Load the project's source tree + reset the editor on project switch ----------
+  useEffect(() => {
+    const slug = activeProject?.slug;
+    // A new project starts with just the entry tab open; drop any cached
+    // non-entry content from the previous project.
+    setFileContents({});
+    resetEditorFiles(ENTRY_FILE);
+    if (!slug) {
+      setFiles([]);
+      return;
+    }
+    let cancelled = false;
+    invoke<ProjectFile[]>("list_project_files", { slug })
+      .then((f) => {
+        if (!cancelled) setFiles(f);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setFiles([]);
+          pushToast({
+            kind: "warn",
+            text: `Couldn't list project files: ${String(err)}`,
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProject?.slug, resetEditorFiles, pushToast]);
+
+  // --- Lazily load a non-entry file's content when its tab becomes active ------------
+  // The entry file's content is `code` (mirrored by the watcher); other files are
+  // read on demand and cached in `fileContents`.
+  useEffect(() => {
+    const slug = activeProject?.slug;
+    if (!slug || !activeFile || activeFile === ENTRY_FILE) return;
+    if (activeFile in fileContents) return;
+    let cancelled = false;
+    invoke<string>("read_file", { slug, path: activeFile })
+      .then((c) => {
+        if (!cancelled) setFileContents((prev) => ({ ...prev, [activeFile]: c }));
+      })
+      .catch((err) => {
+        if (!cancelled)
+          pushToast({
+            kind: "error",
+            text: `Couldn't open ${activeFile}: ${String(err)}`,
+          });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeFile, activeProject?.slug, fileContents, pushToast]);
 
   // --- Watch animation.tsx on disk: it is the display source of truth ---------------
   // Both the user (Monaco) and Claude (terminal) write this file; the backend
@@ -380,18 +470,36 @@ function App() {
     }
   }, []);
 
+  // Content shown in the editor for the active tab: the entry file uses `code`
+  // (the preview source); any other open file uses its cached content.
+  const activeContent =
+    activeFile === ENTRY_FILE
+      ? code
+      : activeFile
+        ? (fileContents[activeFile] ?? "")
+        : "";
+  const contentLoading =
+    !!activeFile && activeFile !== ENTRY_FILE && !(activeFile in fileContents);
+
   const renderPanel = useCallback(
     (id: PanelId) => {
       switch (id) {
         case "terminal":
           return <TerminalPanel />;
         case "editor":
-          return <CodePanel code={code} onCodeChange={handleCodeChange} />;
+          return (
+            <CodePanel
+              files={files}
+              activeContent={activeContent}
+              loading={contentLoading}
+              onContentChange={handleContentChange}
+            />
+          );
         case "preview":
           return <PreviewPanel code={code} />;
       }
     },
-    [code, handleCodeChange],
+    [code, files, activeContent, contentLoading, handleContentChange],
   );
 
   return (

@@ -22,3 +22,10 @@ export interface ProjectMeta {
   slug: string;
   updatedAt: string;
 }
+
+/** One node in a project's source tree, returned by `list_project_files`.
+ *  `path` is project-relative with forward slashes (e.g. `components/Card.tsx`). */
+export interface ProjectFile {
+  path: string;
+  isDir: boolean;
+}

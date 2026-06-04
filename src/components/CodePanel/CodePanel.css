@@ -1,24 +1,179 @@
-/* CodePanel: header (title + copy) stacked over the Monaco editor body.
-   The base .panel is a flex row; the code panel stacks vertically. */
+/* CodePanel: a VS Code-style layout -- a left file-tree rail next to the editor
+   area (tabs row stacked over the Monaco body). The base .panel is a flex row;
+   the code panel fills it with its own two-column layout. */
 .panel--code {
   flex-direction: column;
 }
 
-.codepanel__header {
+.codepanel__layout {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* --- file tree rail ------------------------------------------------------- */
+.filetree {
+  flex: 0 0 180px;
+  width: 180px;
+  overflow: auto;
+  background: #1a1a1a;
+  border-right: 1px solid #2a2a2a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  user-select: none;
+}
+
+.filetree__header {
+  padding: 6px 10px;
+  color: #7a7f85;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid #242424;
+  position: sticky;
+  top: 0;
+  background: #1a1a1a;
+}
+
+.filetree__empty {
+  padding: 10px;
+  color: #666;
+  font-size: 11px;
+}
+
+.filetree__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.filetree__row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 4px;
+  width: 100%;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #c8ccd0;
+  text-align: left;
+  padding: 3px 8px;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.filetree__row:hover {
+  background: #232323;
+}
+
+.filetree__row--active {
+  background: #2d3a4f;
+  color: #fff;
+}
+
+.filetree__row--active:hover {
+  background: #324460;
+}
+
+.filetree__chevron {
+  display: inline-block;
+  width: 10px;
+  color: #7a7f85;
+  font-size: 10px;
+}
+
+.filetree__row--dir .filetree__name {
+  color: #d4d4d4;
+}
+
+.filetree__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.filetree__badge {
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: #3a4a2a;
+  color: #a3d977;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* --- editor area (tabs + body) -------------------------------------------- */
+.codepanel__main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.codetabs {
+  display: flex;
+  align-items: stretch;
   flex: 0 0 auto;
-  padding: 6px 10px;
   background: #202020;
   border-bottom: 1px solid #2a2a2a;
 }
 
-.codepanel__title {
+.codetabs__scroll {
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.codetab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #252525;
+  border-right: 1px solid #1a1a1a;
   color: #9aa0a6;
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+  border-top: 2px solid transparent;
+}
+
+.codetab:hover {
+  background: #2a2a2a;
+}
+
+.codetab--active {
+  background: #1e1e1e;
+  color: #fff;
+  border-top-color: #4a90d9;
+}
+
+.codetab__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.codetab__close {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #777;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 2px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.codetab__close:hover {
+  background: #444;
+  color: #ddd;
 }
 
 .codepanel__copy {
@@ -27,26 +182,56 @@
   background: #2a2a2a;
   color: #ddd;
   font-size: 11px;
+  margin: 4px 8px;
   padding: 3px 10px;
   border-radius: 4px;
   cursor: pointer;
+  flex: 0 0 auto;
+  align-self: center;
   transition: background 0.12s ease, border-color 0.12s ease;
 }
 
-.codepanel__copy:hover {
+.codepanel__copy:hover:not(:disabled) {
   background: #333;
   border-color: #4a4a4a;
 }
 
-.codepanel__copy:active {
-  background: #262626;
+.codepanel__copy:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
-/* The editor fills the remaining space; overlay is positioned against it. */
+/* The editor fills the remaining space; overlay/hint position against it. */
 .codepanel__body {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+  background: #1e1e1e;
+}
+
+.codepanel__placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: #666;
+  font-size: 13px;
+}
+
+.codepanel__hint {
+  position: absolute;
+  bottom: 8px;
+  right: 12px;
+  z-index: 3;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: rgba(40, 40, 40, 0.92);
+  border: 1px solid #3a3a3a;
+  color: #c9a227;
+  font-size: 11px;
+  font-family: Inter, sans-serif;
+  pointer-events: none;
 }
 
 .monaco-host {
@@ -64,22 +249,9 @@
   font-size: 13px;
 }
 
-/* Brief highlight when code is replaced from outside (generated animation). */
-.monaco-host--flash {
-  animation: codepanel-flash 0.5s ease-out;
-}
-
-@keyframes codepanel-flash {
-  0% {
-    box-shadow: inset 0 0 0 9999px rgba(250, 204, 21, 0.22);
-  }
-  100% {
-    box-shadow: inset 0 0 0 9999px rgba(250, 204, 21, 0);
-  }
-}
-
-/* Read-only veil while a generation is streaming. pointer-events:none keeps it
-   purely visual; the editor's own readOnly option blocks input. */
+/* Read-only veil while a generation is streaming (or a file is loading).
+   pointer-events:none keeps it purely visual; the editor's own readOnly option
+   blocks input. */
 .codepanel__overlay {
   position: absolute;
   inset: 0;

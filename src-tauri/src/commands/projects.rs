@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
@@ -117,6 +117,20 @@ pub struct Message {
     pub content: String,
     pub timestamp: String,
 }
+
+/// One entry in a project's source tree. `path` is project-relative and always
+/// uses forward slashes so the frontend can split it uniformly across platforms.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectFile {
+    pub path: String,
+    pub is_dir: bool,
+}
+
+/// Names excluded from the source tree: project metadata, the (vestigial)
+/// conversation log, the media folder, and a future per-project chats folder.
+/// Everything else under the project dir is treated as editable source.
+const NON_SOURCE: [&str; 4] = ["project.json", "conversation.json", "assets", "chats"];
 
 // --- path helpers -----------------------------------------------------------
 
@@ -274,6 +288,114 @@ pub fn load_animation(app: AppHandle, slug: String) -> Result<String, String> {
         return Ok(String::new());
     }
     fs::read_to_string(&path).map_err(|e| format!("failed to read animation.tsx: {e}"))
+}
+
+// --- generalized per-path file access ---------------------------------------
+
+/// Resolve a project-relative path to an absolute path inside `dir`, rejecting
+/// anything that could escape the project directory. Only "normal" path
+/// components are allowed -- absolute paths, `..`, and Windows prefixes/root
+/// components are all refused, so the result is guaranteed to stay under `dir`.
+fn safe_join(dir: &Path, rel: &str) -> Result<PathBuf, String> {
+    let rel = rel.trim();
+    if rel.is_empty() {
+        return Err("empty path".to_string());
+    }
+    let candidate = Path::new(rel);
+    if candidate.is_absolute() {
+        return Err(format!("absolute paths are not allowed: {rel}"));
+    }
+    for component in candidate.components() {
+        match component {
+            Component::Normal(_) => {}
+            _ => return Err(format!("path may not contain '..' or root segments: {rel}")),
+        }
+    }
+    Ok(dir.join(candidate))
+}
+
+/// Recursively collect a project's source files (and the directories that hold
+/// them), excluding metadata, assets, chats, and dotfiles. Paths are
+/// project-relative with forward slashes. Today most projects are just
+/// `animation.tsx`; the tree still renders cleanly with a single file.
+fn collect_files(base: &Path, dir: &Path, out: &mut Vec<ProjectFile>) -> Result<(), String> {
+    let entries =
+        fs::read_dir(dir).map_err(|e| format!("failed to read {}: {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("failed to read dir entry: {e}"))?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // Skip non-source entries and anything hidden (e.g. .DS_Store).
+        if name.starts_with('.') || NON_SOURCE.contains(&name.as_ref()) {
+            continue;
+        }
+        let path = entry.path();
+        let rel = path
+            .strip_prefix(base)
+            .map_err(|e| format!("failed to relativize path: {e}"))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let is_dir = path.is_dir();
+        out.push(ProjectFile {
+            path: rel,
+            is_dir,
+        });
+        if is_dir {
+            collect_files(base, &path, out)?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_project_files(app: AppHandle, slug: String) -> Result<Vec<ProjectFile>, String> {
+    let dir = project_dir(&app, &slug)?;
+    if !dir.is_dir() {
+        return Err(format!("project '{slug}' not found"));
+    }
+    let mut files = Vec::new();
+    collect_files(&dir, &dir, &mut files)?;
+    // Directories first, then files; alphabetical within each. This gives the
+    // frontend a stable, tree-friendly order without re-sorting.
+    files.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.path.cmp(&b.path),
+    });
+    Ok(files)
+}
+
+#[tauri::command]
+pub fn read_file(app: AppHandle, slug: String, path: String) -> Result<String, String> {
+    let dir = project_dir(&app, &slug)?;
+    if !dir.is_dir() {
+        return Err(format!("project '{slug}' not found"));
+    }
+    let target = safe_join(&dir, &path)?;
+    if !target.exists() {
+        return Ok(String::new());
+    }
+    fs::read_to_string(&target).map_err(|e| format!("failed to read {path}: {e}"))
+}
+
+#[tauri::command]
+pub fn write_file(
+    app: AppHandle,
+    slug: String,
+    path: String,
+    contents: String,
+) -> Result<(), String> {
+    let dir = project_dir(&app, &slug)?;
+    if !dir.is_dir() {
+        return Err(format!("project '{slug}' not found"));
+    }
+    let target = safe_join(&dir, &path)?;
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create parent dirs for {path}: {e}"))?;
+    }
+    fs::write(&target, contents).map_err(|e| format!("failed to write {path}: {e}"))?;
+    touch_updated_at(&dir)
 }
 
 #[tauri::command]

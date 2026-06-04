@@ -3,12 +3,20 @@ id: monaco-cdn-offline-loader
 root: gotchas
 type: gotcha
 status: current
-summary: "@monaco-editor/react fetches Monaco from a CDN by default; the offline desktop app must loader.config({ monaco }) against the bundled monaco-editor and wire workers via Vite ?worker imports."
+summary: "@monaco-editor/react fetches Monaco from a CDN by default; the offline desktop app must loader.config({ monaco }) against the bundled monaco-editor and wire workers via Vite ?worker imports. monaco-editor MUST be a declared dependency -- it was a latent peer-only auto-install until T-041 pinned it ^0.55.1."
 related:
   - architecture/preview-sandbox
 created: 2026-06-04
 updated: 2026-06-04
 ---
+
+> **T-041 update:** `loader.config({ monaco })` and the worker imports below all
+> depend on `monaco-editor` being installed -- but it was NOT in `package.json`
+> until T-041. It only resolved because bun auto-installed it as a peer of
+> `@monaco-editor/react`; a clean install / CI / npm would have dropped it and the
+> editor would have vanished. It is now a declared dependency pinned `^0.55.1`
+> (installed 0.55.1) with `bun.lock` updated. Do not remove it assuming
+> `@monaco-editor/react` pulls it in -- it is a peer, not a hard dep.
 
 `@monaco-editor/react` does NOT bundle the Monaco editor. By default its `loader`
 fetches the runtime from a jsDelivr CDN at first render. That works in `vite dev`

@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from "react";
 import Editor, { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
@@ -31,12 +30,25 @@ const EDITOR_OPTIONS = {
   fontLigatures: true,
 } as const;
 
-const FLASH_MS = 500;
+/** Map a file path to a Monaco language id. The TS language handles .tsx via the
+ *  jsx compiler option useMonaco already sets. */
+function languageForPath(path: string): string {
+  if (path.endsWith(".ts") || path.endsWith(".tsx")) return "typescript";
+  if (path.endsWith(".js") || path.endsWith(".jsx")) return "javascript";
+  if (path.endsWith(".css")) return "css";
+  if (path.endsWith(".json")) return "json";
+  if (path.endsWith(".html")) return "html";
+  if (path.endsWith(".md")) return "markdown";
+  return "plaintext";
+}
 
 interface MonacoEditorProps {
-  /** Current source. External changes (e.g. generated code) are applied
-   *  imperatively with a flash; user typing flows out via onCodeChange. */
-  code: string;
+  /** Project-relative path of the active file. Drives Monaco's per-file model so
+   *  each open tab keeps its own content, undo history, and scroll position. */
+  path: string;
+  /** Current content of the active file (controlled). External updates -- the
+   *  animation.tsx watcher -- flow in here and are applied cursor-preservingly. */
+  value: string;
   readOnly: boolean;
   editorRef: React.MutableRefObject<CodeEditor | null>;
   onCodeChange?: (code: string) => void;
@@ -44,37 +56,21 @@ interface MonacoEditorProps {
 }
 
 function MonacoEditor({
-  code,
+  path,
+  value,
   readOnly,
   editorRef,
   onCodeChange,
   onLineCountChange,
 }: MonacoEditorProps) {
   const { handleMount } = useMonaco({ editorRef, onCodeChange, onLineCountChange });
-  const [flash, setFlash] = useState(false);
-  // The value Monaco mounts with; later `code` changes are applied imperatively.
-  const initialValue = useRef(code);
-
-  // Apply external code updates (a freshly generated animation) imperatively,
-  // with a brief highlight. The getValue() guard breaks the typing feedback
-  // loop: user keystrokes already match the editor, so they never re-trigger
-  // a setValue (which would jump the cursor).
-  useEffect(() => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    if (editor.getValue() === code) return;
-    editor.setValue(code);
-    setFlash(true);
-    const t = window.setTimeout(() => setFlash(false), FLASH_MS);
-    return () => window.clearTimeout(t);
-  }, [code, editorRef]);
 
   return (
-    <div className={`monaco-host${flash ? " monaco-host--flash" : ""}`}>
+    <div className="monaco-host">
       <Editor
-        defaultLanguage="typescript"
-        defaultValue={initialValue.current}
-        path="animation.tsx"
+        language={languageForPath(path)}
+        path={path}
+        value={value}
         theme="vs-dark"
         onMount={handleMount}
         options={{ ...EDITOR_OPTIONS, readOnly }}

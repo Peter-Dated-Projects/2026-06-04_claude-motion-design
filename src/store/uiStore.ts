@@ -16,11 +16,25 @@ export interface UIState {
   safeZonePlatform: SafeZonePlatform;
   selection: Selection | null;
 
+  /** Project-relative paths of files with an open editor tab, in tab order. */
+  openFiles: string[];
+  /** The path of the file currently shown in the editor, or null if none. */
+  activeFile: string | null;
+
   setPanelWidths: (widths: [number, number, number]) => void;
   setIsGenerating: (value: boolean) => void;
   toggleSafeZone: () => void;
   setSafeZonePlatform: (platform: SafeZonePlatform) => void;
   setSelection: (selection: Selection | null) => void;
+
+  /** Open a file: add a tab if absent and make it active. */
+  openFile: (path: string) => void;
+  /** Close a tab; if it was active, fall back to a neighbouring tab. */
+  closeFile: (path: string) => void;
+  /** Switch the active tab without changing which tabs are open. */
+  setActiveFile: (path: string) => void;
+  /** Reset the editor to a single open tab (used on project switch). */
+  resetEditorFiles: (entry: string) => void;
 }
 
 const PANEL_WIDTHS_KEY = "claude-motion:panelWidths";
@@ -58,6 +72,8 @@ export const useUIStore = create<UIState>((set) => ({
   showSafeZone: true,
   safeZonePlatform: "universal",
   selection: null,
+  openFiles: [],
+  activeFile: null,
 
   setPanelWidths: (widths) => {
     persistPanelWidths(widths);
@@ -67,4 +83,29 @@ export const useUIStore = create<UIState>((set) => ({
   toggleSafeZone: () => set((state) => ({ showSafeZone: !state.showSafeZone })),
   setSafeZonePlatform: (platform) => set({ safeZonePlatform: platform }),
   setSelection: (selection) => set({ selection }),
+
+  openFile: (path) =>
+    set((state) => ({
+      openFiles: state.openFiles.includes(path)
+        ? state.openFiles
+        : [...state.openFiles, path],
+      activeFile: path,
+    })),
+
+  closeFile: (path) =>
+    set((state) => {
+      const idx = state.openFiles.indexOf(path);
+      if (idx === -1) return state;
+      const openFiles = state.openFiles.filter((p) => p !== path);
+      let activeFile = state.activeFile;
+      if (activeFile === path) {
+        // Fall back to the previous tab, else the next, else nothing.
+        activeFile = openFiles[idx - 1] ?? openFiles[idx] ?? null;
+      }
+      return { openFiles, activeFile };
+    }),
+
+  setActiveFile: (path) => set({ activeFile: path }),
+
+  resetEditorFiles: (entry) => set({ openFiles: [entry], activeFile: entry }),
 }));
