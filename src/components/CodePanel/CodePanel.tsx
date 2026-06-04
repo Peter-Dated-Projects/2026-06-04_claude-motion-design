@@ -5,6 +5,7 @@ import type { ProjectFile } from "../../types";
 import "./CodePanel.css";
 
 const MonacoEditor = lazy(() => import("./MonacoEditor"));
+const AssetsView = lazy(() => import("./AssetsView"));
 
 /** The entry point: the only file the sandbox compiler bundles and the preview
  *  renders. Editing any other file saves to disk but does NOT yet affect the
@@ -174,6 +175,8 @@ function CodePanel({
   const setActiveFile = useUIStore((s) => s.setActiveFile);
   const showFileTree = useUIStore((s) => s.showFileTree);
   const toggleFileTree = useUIStore((s) => s.toggleFileTree);
+  const codePanelView = useUIStore((s) => s.codePanelView);
+  const setCodePanelView = useUIStore((s) => s.setCodePanelView);
 
   const editorRef = useRef<CodeEditor | null>(null);
   const [copied, setCopied] = useState(false);
@@ -207,9 +210,37 @@ function CodePanel({
     <section className="panel panel--code">
       <div className="codepanel__layout">
         {showFileTree && (
-          <aside className="filetree" aria-label="Project files">
+          <aside
+            className={`filetree${
+              codePanelView === "assets" ? " filetree--assets" : ""
+            }`}
+            aria-label="Project files"
+          >
             <div className="filetree__header">
-              <span>Files</span>
+              <div className="filetree__views" role="tablist" aria-label="Rail view">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={codePanelView === "files"}
+                  className={`filetree__view${
+                    codePanelView === "files" ? " filetree__view--active" : ""
+                  }`}
+                  onClick={() => setCodePanelView("files")}
+                >
+                  Files
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={codePanelView === "assets"}
+                  className={`filetree__view${
+                    codePanelView === "assets" ? " filetree__view--active" : ""
+                  }`}
+                  onClick={() => setCodePanelView("assets")}
+                >
+                  Assets
+                </button>
+              </div>
               <button
                 type="button"
                 className="filetree__collapse"
@@ -220,7 +251,11 @@ function CodePanel({
                 {"<<"}
               </button>
             </div>
-            {tree.length === 0 ? (
+            {codePanelView === "assets" ? (
+              <Suspense fallback={<div className="assets__empty">Loading...</div>}>
+                <AssetsView />
+              </Suspense>
+            ) : tree.length === 0 ? (
               <div className="filetree__empty">No files</div>
             ) : (
               <TreeView

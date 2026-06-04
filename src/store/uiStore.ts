@@ -2,6 +2,10 @@ import { create } from "zustand";
 
 export type SafeZonePlatform = "universal" | "tiktok" | "instagram" | "youtube";
 
+/** Which view the Code panel's left rail shows: the source file tree or the
+ *  project's image assets. */
+export type CodePanelView = "files" | "assets";
+
 export interface Selection {
   text: string;
   startLine: number;
@@ -19,6 +23,9 @@ export interface UIState {
   /** Whether the Code panel's file-tree rail is shown. Persisted. */
   showFileTree: boolean;
 
+  /** Which view the Code panel's left rail shows: file tree or assets. Persisted. */
+  codePanelView: CodePanelView;
+
   /** Project-relative paths of files with an open editor tab, in tab order. */
   openFiles: string[];
   /** The path of the file currently shown in the editor, or null if none. */
@@ -31,6 +38,8 @@ export interface UIState {
   setSelection: (selection: Selection | null) => void;
   /** Show or hide the Code panel's file-tree rail (persisted). */
   toggleFileTree: () => void;
+  /** Switch the Code panel's left rail between the file tree and assets (persisted). */
+  setCodePanelView: (view: CodePanelView) => void;
 
   /** Open a file: add a tab if absent and make it active. */
   openFile: (path: string) => void;
@@ -61,6 +70,26 @@ function loadShowFileTree(): boolean {
 function persistShowFileTree(show: boolean): void {
   try {
     localStorage.setItem(FILE_TREE_KEY, String(show));
+  } catch {
+    // Best-effort; ignore quota/availability errors.
+  }
+}
+
+const CODE_PANEL_VIEW_KEY = "claude-motion:codePanelView";
+
+function loadCodePanelView(): CodePanelView {
+  try {
+    const raw = localStorage.getItem(CODE_PANEL_VIEW_KEY);
+    return raw === "assets" ? "assets" : "files";
+  } catch {
+    // Storage unavailable -> default to the file tree.
+    return "files";
+  }
+}
+
+function persistCodePanelView(view: CodePanelView): void {
+  try {
+    localStorage.setItem(CODE_PANEL_VIEW_KEY, view);
   } catch {
     // Best-effort; ignore quota/availability errors.
   }
@@ -99,6 +128,7 @@ export const useUIStore = create<UIState>((set) => ({
   safeZonePlatform: "universal",
   selection: null,
   showFileTree: loadShowFileTree(),
+  codePanelView: loadCodePanelView(),
   openFiles: [],
   activeFile: null,
 
@@ -116,6 +146,10 @@ export const useUIStore = create<UIState>((set) => ({
       persistShowFileTree(showFileTree);
       return { showFileTree };
     }),
+  setCodePanelView: (view) => {
+    persistCodePanelView(view);
+    set({ codePanelView: view });
+  },
 
   openFile: (path) =>
     set((state) => ({

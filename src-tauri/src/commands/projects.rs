@@ -127,6 +127,17 @@ pub struct ProjectFile {
     pub is_dir: bool,
 }
 
+/// One image in a project's `assets/` folder. The bytes are inlined as a base64
+/// `data:` URI so the WKWebView can render the thumbnail directly without a
+/// custom asset protocol or asset-scope configuration -- the simplest option
+/// that renders reliably for a small, local set of files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetFile {
+    pub name: String,
+    pub data_uri: String,
+}
+
 /// Names excluded from the source tree: project metadata, the (vestigial)
 /// conversation log, the media folder, and a future per-project chats folder.
 /// Everything else under the project dir is treated as editable source.
@@ -444,6 +455,156 @@ pub fn reveal_project(app: AppHandle, slug: Option<String>) -> Result<(), String
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("failed to reveal {}: {e}", target.display()))
+}
+
+// --- assets -----------------------------------------------------------------
+// Image assets live under each project's `assets/` folder. They are display-only
+// for now (shown in the Code panel's Assets view); wiring them into the rendered
+// animation is a deliberate follow-up. Everything here is std-only, matching the
+// rest of this module -- including a tiny base64 encoder so we can build inline
+// `data:` URIs without pulling in the `base64` crate (Cargo.toml is out of scope).
+
+/// Image extensions we surface in the Assets view, matched case-insensitively.
+const IMAGE_EXTS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
+
+/// The lowercased file extension of `name`, or "" if it has none.
+fn extension_of(name: &str) -> String {
+    Path::new(name)
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+fn is_image_ext(ext: &str) -> bool {
+    IMAGE_EXTS.contains(&ext)
+}
+
+/// MIME type for a supported image extension (already lowercased).
+fn mime_for_ext(ext: &str) -> &'static str {
+    match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Standard base64 encoding (RFC 4648, with `=` padding). Std-only.
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((n >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Build a `data:` URI for an image file's bytes.
+fn data_uri(ext: &str, bytes: &[u8]) -> String {
+    format!("data:{};base64,{}", mime_for_ext(ext), base64_encode(bytes))
+}
+
+/// The project's `assets/` directory, created if missing.
+fn assets_dir(app: &AppHandle, slug: &str) -> Result<PathBuf, String> {
+    let dir = project_dir(app, slug)?;
+    if !dir.is_dir() {
+        return Err(format!("project '{slug}' not found"));
+    }
+    let assets = dir.join("assets");
+    fs::create_dir_all(&assets).map_err(|e| format!("failed to create assets dir: {e}"))?;
+    Ok(assets)
+}
+
+/// List image files in the project's `assets/` folder as inline data URIs,
+/// sorted by name. Non-image files and dotfiles are skipped.
+#[tauri::command]
+pub fn list_assets(app: AppHandle, slug: String) -> Result<Vec<AssetFile>, String> {
+    let assets = assets_dir(&app, &slug)?;
+    let mut out: Vec<AssetFile> = Vec::new();
+    for entry in fs::read_dir(&assets).map_err(|e| format!("failed to read assets dir: {e}"))? {
+        let entry = entry.map_err(|e| format!("failed to read dir entry: {e}"))?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let ext = extension_of(&name);
+        if !is_image_ext(&ext) {
+            continue;
+        }
+        let bytes = fs::read(&path).map_err(|e| format!("failed to read {name}: {e}"))?;
+        out.push(AssetFile {
+            data_uri: data_uri(&ext, &bytes),
+            name,
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+/// Write a dropped image into the project's `assets/` folder and return it as an
+/// `AssetFile`. `name` is reduced to its bare file name (any directory parts are
+/// dropped) and must carry a supported image extension. Name collisions are
+/// resolved by inserting a numeric suffix (`logo.png` -> `logo-1.png`).
+#[tauri::command]
+pub fn add_asset(
+    app: AppHandle,
+    slug: String,
+    name: String,
+    bytes: Vec<u8>,
+) -> Result<AssetFile, String> {
+    let assets = assets_dir(&app, &slug)?;
+
+    // Reduce to a bare file name so a dropped path can't smuggle in separators.
+    let base = Path::new(name.trim())
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if base.is_empty() || base.starts_with('.') {
+        return Err(format!("invalid asset file name: {name}"));
+    }
+    let ext = extension_of(&base);
+    if !is_image_ext(&ext) {
+        return Err(format!("'{base}' is not a supported image type"));
+    }
+
+    // Resolve collisions: foo.png, foo-1.png, foo-2.png, ...
+    let stem = &base[..base.len() - ext.len() - 1]; // strip ".ext"
+    let mut final_name = base.clone();
+    let mut n = 1;
+    while assets.join(&final_name).exists() {
+        final_name = format!("{stem}-{n}.{ext}");
+        n += 1;
+    }
+
+    // safe_join re-validates that the resolved name stays inside assets/.
+    let target = safe_join(&assets, &final_name)?;
+    fs::write(&target, &bytes).map_err(|e| format!("failed to write {final_name}: {e}"))?;
+
+    Ok(AssetFile {
+        data_uri: data_uri(&ext, &bytes),
+        name: final_name,
+    })
 }
 
 /// Bump updated_at on project.json after a mutating write.

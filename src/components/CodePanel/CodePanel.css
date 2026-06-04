@@ -58,10 +58,154 @@
   color: #333;
 }
 
+/* When showing assets the rail is a touch wider so thumbnails breathe. */
+.filetree--assets {
+  flex-basis: 220px;
+  width: 220px;
+}
+
+/* Files/Assets segmented control, seated where the FILES label used to be. */
+.filetree__views {
+  display: flex;
+  gap: 2px;
+}
+
+.filetree__view {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #888;
+  font-family: inherit;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.filetree__view:hover {
+  color: #333;
+  background: #ececec;
+}
+
+.filetree__view--active {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.filetree__view--active:hover {
+  background: #cfe0fb;
+  color: #1d4ed8;
+}
+
 .filetree__empty {
   padding: 10px;
   color: #999;
   font-size: 11px;
+}
+
+/* --- assets view ---------------------------------------------------------- */
+.assets {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  font-family: Inter, sans-serif;
+}
+
+.assets__error {
+  margin: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: #fde8e8;
+  border: 1px solid #f5c2c2;
+  color: #9b1c1c;
+  font-size: 11px;
+}
+
+.assets__empty {
+  padding: 16px 12px;
+  color: #999;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.assets__grid {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 8px;
+}
+
+.assets__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.assets__thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1 / 1;
+  background:
+    linear-gradient(45deg, #efefef 25%, transparent 25%) 0 0/12px 12px,
+    linear-gradient(-45deg, #efefef 25%, transparent 25%) 0 0/12px 12px,
+    #fafafa;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.assets__thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.assets__name {
+  font-size: 10px;
+  color: #555;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assets__hint {
+  margin-top: auto;
+  padding: 6px 10px;
+  color: #999;
+  font-size: 10px;
+  text-align: center;
+  border-top: 1px solid #ececec;
+}
+
+/* Drop affordance overlay while a drag is hovering the assets rail. */
+.assets--dragover {
+  outline: 2px dashed #3b82f6;
+  outline-offset: -4px;
+}
+
+.assets__dropmask {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  text-align: center;
+  background: rgba(219, 234, 254, 0.85);
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+  z-index: 4;
 }
 
 .filetree__list {
