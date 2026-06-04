@@ -1,0 +1,11 @@
+# Charm run state is ephemeral and ignored, EXCEPT the durable knowledge base.
+# `.charm/*` ignores the run-state children; `!.charm/kb/` re-includes the KB.
+.charm/*
+!.charm/kb/
+
+# Node / frontend
+node_modules/
+dist/
+
+# Rust / Tauri build artifacts
+src-tauri/target/
