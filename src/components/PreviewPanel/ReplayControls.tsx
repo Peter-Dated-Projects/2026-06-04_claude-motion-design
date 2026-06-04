@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import "./ReplayControls.css";
 
 // Playback controls rendered below the phone bezel. This component is self-contained:
 // the sandbox iframe (src/assets/sandbox-frame.html, from T-026) already handles the
@@ -55,58 +56,73 @@ export function formatTime(frame: number, fps: number): string {
   return `${minutes}:${String(seconds).padStart(2, "0")}.${String(frames).padStart(2, "0")}`;
 }
 
-// --- Styles (match the PreviewPanel toolbar palette) --------------------------------
-const BAR_STYLE: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "6px 8px",
-  borderTop: "1px solid #2a2a2a",
-  background: "#161616",
-  flex: "0 0 auto",
-  fontFamily: "sans-serif",
-  fontSize: 12,
-  color: "#ddd",
-};
-
-const BTN_STYLE: React.CSSProperties = {
-  background: "#1d1d1d",
-  color: "#ddd",
-  border: "1px solid #333",
-  borderRadius: 4,
-  padding: "3px 8px",
-  fontSize: 12,
-  lineHeight: 1,
-  cursor: "pointer",
-  fontFamily: "sans-serif",
-  minWidth: 28,
-};
-
-const TIME_STYLE: React.CSSProperties = {
-  fontFamily: "ui-monospace, monospace",
-  fontSize: 12,
-  color: "#9aa",
-  whiteSpace: "nowrap",
-};
-
-function speedButtonStyle(active: boolean): React.CSSProperties {
-  return {
-    ...BTN_STYLE,
-    minWidth: 0,
-    color: active ? "#ffd24a" : "#9aa",
-    borderColor: active ? "#5a4a16" : "#333",
-    background: active ? "#2a2410" : "#1d1d1d",
-  };
+// --- Inline SVG transport icons ---------------------------------------------------
+// Crisp vector icons drawn with currentColor (no icon-font / emoji dependency), following
+// the EyeIcon pattern in PreviewPanel. viewBox 0 0 24 24; the bar sets the color.
+function Icon({ children }: { children: React.ReactNode }) {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden
+      focusable={false}
+    >
+      {children}
+    </svg>
+  );
 }
 
-function toggleButtonStyle(active: boolean): React.CSSProperties {
-  return {
-    ...BTN_STYLE,
-    minWidth: 0,
-    color: active ? "#ffd24a" : "#9aa",
-    borderColor: active ? "#5a4a16" : "#333",
-    background: active ? "#2a2410" : "#1d1d1d",
-  };
+function SkipToStartIcon() {
+  return (
+    <Icon>
+      <rect x={5} y={5} width={2.5} height={14} rx={0.5} />
+      <path d="M20 5.5v13a1 1 0 0 1-1.55.84L9 13.2a1 1 0 0 1 0-1.68l9.45-6.14A1 1 0 0 1 20 6.2z" />
+    </Icon>
+  );
+}
+
+function StepBackIcon() {
+  return (
+    <Icon>
+      <path d="M16 5.5v13a1 1 0 0 1-1.55.84L5 13.2a1 1 0 0 1 0-1.68l9.45-6.14A1 1 0 0 1 16 6.2z" />
+    </Icon>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <Icon>
+      <path d="M7 4.5v15a1 1 0 0 0 1.53.85l12-7.5a1 1 0 0 0 0-1.7l-12-7.5A1 1 0 0 0 7 4.5z" />
+    </Icon>
+  );
+}
+
+function PauseIcon() {
+  return (
+    <Icon>
+      <rect x={6} y={5} width={4} height={14} rx={1} />
+      <rect x={14} y={5} width={4} height={14} rx={1} />
+    </Icon>
+  );
+}
+
+function StepForwardIcon() {
+  return (
+    <Icon>
+      <path d="M8 5.5v13a1 1 0 0 0 1.55.84L19 13.2a1 1 0 0 0 0-1.68L9.55 5.38A1 1 0 0 0 8 6.2z" />
+    </Icon>
+  );
+}
+
+function SkipToEndIcon() {
+  return (
+    <Icon>
+      <path d="M4 5.5v13a1 1 0 0 0 1.55.84L15 13.2a1 1 0 0 0 0-1.68L5.55 5.38A1 1 0 0 0 4 6.2z" />
+      <rect x={16.5} y={5} width={2.5} height={14} rx={0.5} />
+    </Icon>
+  );
 }
 
 // True when keyboard focus sits in a text-entry context (so Space should type, not toggle).
@@ -136,6 +152,11 @@ function ReplayControls({
   // While the user is actively dragging the scrubber, ignore inbound frameUpdate frames
   // so the thumb doesn't fight the user's pointer.
   const scrubbingRef = useRef(false);
+
+  // Autoplay only the FIRST successful render of a session. Subsequent recompiles
+  // (Claude/editor edits) must not hijack playback -- we leave the sandbox in whatever
+  // play/pause state it was already in, so iterating on code isn't disruptive.
+  const hasAutoplayedRef = useRef(false);
 
   const lastFrame = Math.max(0, totalFrames - 1);
 
@@ -172,8 +193,12 @@ function ReplayControls({
           setCurrentFrame(data.frame);
         }
       } else if (data.type === "renderOk") {
-        // Auto-play whenever a freshly compiled animation renders successfully.
-        post({ type: "play" });
+        // Autoplay only the very first render; later recompiles preserve the prior
+        // play/pause state instead of force-restarting playback.
+        if (!hasAutoplayedRef.current) {
+          hasAutoplayedRef.current = true;
+          post({ type: "play" });
+        }
       }
     };
 
@@ -215,63 +240,68 @@ function ReplayControls({
     post({ type: "setLoop", loop: next });
   };
 
+  const scrubProgress = lastFrame > 0 ? Math.min(currentFrame, lastFrame) / lastFrame : 0;
+
   return (
-    <div style={BAR_STYLE}>
-      <button
-        type="button"
-        style={BTN_STYLE}
-        onClick={() => seekTo(0)}
-        title="Jump to start"
-        aria-label="Jump to start"
-      >
-        |&lt;
-      </button>
-      <button
-        type="button"
-        style={BTN_STYLE}
-        onClick={() => seekTo(currentFrame - 1)}
-        title="Step back one frame"
-        aria-label="Step back one frame"
-      >
-        &lt;
-      </button>
-      <button
-        type="button"
-        style={BTN_STYLE}
-        onClick={handlePlayPause}
-        title={isPlaying ? "Pause" : "Play"}
-        aria-label={isPlaying ? "Pause" : "Play"}
-        aria-pressed={isPlaying}
-      >
-        {isPlaying ? "||" : ">"}
-      </button>
-      <button
-        type="button"
-        style={BTN_STYLE}
-        onClick={() => seekTo(currentFrame + 1)}
-        title="Step forward one frame"
-        aria-label="Step forward one frame"
-      >
-        &gt;
-      </button>
-      <button
-        type="button"
-        style={BTN_STYLE}
-        onClick={() => seekTo(lastFrame)}
-        title="Jump to end"
-        aria-label="Jump to end"
-      >
-        &gt;|
-      </button>
+    <div className="replay-bar">
+      <div className="replay-bar__transport">
+        <button
+          type="button"
+          className="replay-btn"
+          onClick={() => seekTo(0)}
+          title="Jump to start"
+          aria-label="Jump to start"
+        >
+          <SkipToStartIcon />
+        </button>
+        <button
+          type="button"
+          className="replay-btn"
+          onClick={() => seekTo(currentFrame - 1)}
+          title="Step back one frame"
+          aria-label="Step back one frame"
+        >
+          <StepBackIcon />
+        </button>
+        <button
+          type="button"
+          className="replay-btn replay-btn--primary"
+          onClick={handlePlayPause}
+          title={isPlaying ? "Pause" : "Play"}
+          aria-label={isPlaying ? "Pause" : "Play"}
+          aria-pressed={isPlaying}
+        >
+          {isPlaying ? <PauseIcon /> : <PlayIcon />}
+        </button>
+        <button
+          type="button"
+          className="replay-btn"
+          onClick={() => seekTo(currentFrame + 1)}
+          title="Step forward one frame"
+          aria-label="Step forward one frame"
+        >
+          <StepForwardIcon />
+        </button>
+        <button
+          type="button"
+          className="replay-btn"
+          onClick={() => seekTo(lastFrame)}
+          title="Jump to end"
+          aria-label="Jump to end"
+        >
+          <SkipToEndIcon />
+        </button>
+      </div>
 
       <input
         type="range"
+        className="replay-scrubber"
         min={0}
         max={lastFrame}
         step={1}
         value={Math.min(currentFrame, lastFrame)}
         aria-label="Scrubber"
-        style={{ flex: 1, minWidth: 60, accentColor: "#ffd24a" }}
+        style={{ "--replay-progress": `${scrubProgress * 100}%` } as React.CSSProperties}
         onPointerDown={() => {
           scrubbingRef.current = true;
         }}
@@ -281,16 +311,16 @@ function ReplayControls({
         onChange={(e) => seekTo(Number(e.target.value))}
       />
 
-      <span style={TIME_STYLE}>
+      <span className="replay-time">
         {formatTime(currentFrame, fps)} / {formatTime(lastFrame, fps)}
       </span>
 
-      <div style={{ display: "inline-flex", gap: 2 }}>
+      <div className="replay-speed">
         {SPEED_OPTIONS.map((option) => (
           <button
             key={option}
             type="button"
-            style={speedButtonStyle(speed === option)}
+            className={`replay-chip${speed === option ? " replay-chip--active" : ""}`}
             aria-pressed={speed === option}
             onClick={() => handleSpeed(option)}
             title={`${option}x speed`}
@@ -302,7 +332,7 @@ function ReplayControls({
 
       <button
         type="button"
-        style={toggleButtonStyle(loop)}
+        className={`replay-chip${loop ? " replay-chip--active" : ""}`}
         aria-pressed={loop}
         onClick={handleLoop}
         title="Toggle loop"

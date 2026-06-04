@@ -1,0 +1,184 @@
+/* ReplayControls: the transport bar beneath the phone bezel. Dark palette consistent
+   with the rest of the preview/code panels; accent #ffd24a. The scrubber is a fully
+   restyled <input type=range> (default browser track/thumb replaced for both webkit
+   and gecko); --replay-progress (set inline from React) fills the track up to the thumb. */
+.replay-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-top: 1px solid #2a2a2a;
+  background: #161616;
+  flex: 0 0 auto;
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+  color: #ddd;
+}
+
+.replay-bar__transport {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Transport buttons: icon-only, square hit target, subtle hover/active feedback. */
+.replay-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  appearance: none;
+  background: transparent;
+  color: #b8bcc2;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.replay-btn:hover {
+  background: #242424;
+  color: #fff;
+  border-color: #333;
+}
+
+.replay-btn:active {
+  background: #1c1c1c;
+}
+
+.replay-btn:focus-visible {
+  outline: none;
+  border-color: #ffd24a;
+}
+
+/* Play/pause gets a touch more presence as the primary control. */
+.replay-btn--primary {
+  color: #ffd24a;
+}
+
+.replay-btn--primary:hover {
+  background: #2a2410;
+  color: #ffe07a;
+  border-color: #5a4a16;
+}
+
+/* --- Scrubber --------------------------------------------------------------------- */
+.replay-scrubber {
+  flex: 1 1 auto;
+  min-width: 60px;
+  height: 18px;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.replay-scrubber:focus {
+  outline: none;
+}
+
+/* Track: filled up to the thumb with the accent, unfilled remainder in grey.
+   --replay-progress is a percentage supplied inline from the component. */
+.replay-scrubber::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    #ffd24a 0%,
+    #ffd24a var(--replay-progress, 0%),
+    #3a3a3a var(--replay-progress, 0%),
+    #3a3a3a 100%
+  );
+}
+
+.replay-scrubber::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: #3a3a3a;
+}
+
+.replay-scrubber::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: #ffd24a;
+}
+
+.replay-scrubber::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  margin-top: -4.5px; /* center the 13px thumb on the 4px track */
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid #ffd24a;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  transition: transform 0.1s ease;
+}
+
+.replay-scrubber::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid #ffd24a;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.replay-scrubber:hover::-webkit-slider-thumb,
+.replay-scrubber:active::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+
+.replay-scrubber:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgba(255, 210, 74, 0.3);
+}
+
+/* --- Time readout ----------------------------------------------------------------- */
+.replay-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: #9aa0a6;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Speed + Loop chips ----------------------------------------------------------- */
+.replay-speed {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.replay-chip {
+  appearance: none;
+  background: #1d1d1d;
+  color: #9aa0a6;
+  border: 1px solid #333;
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1;
+  font-family: system-ui, sans-serif;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.replay-chip:hover {
+  background: #242424;
+  color: #ddd;
+  border-color: #4a4a4a;
+}
+
+.replay-chip:focus-visible {
+  outline: none;
+  border-color: #ffd24a;
+}
+
+.replay-chip--active {
+  color: #ffd24a;
+  border-color: #5a4a16;
+  background: #2a2410;
+}
