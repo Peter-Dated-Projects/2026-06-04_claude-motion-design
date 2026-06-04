@@ -17,3 +17,4 @@ the KB. See `CONTRIBUTING.md` before adding or editing a note.
 | [conventions](conventions/_index.md)   | 3 | Repo patterns and idioms |
 | [gotchas](gotchas/_index.md)           | 25 | Traps and non-obvious constraints |
 | [domain](domain/_index.md)             | 1 | Glossary of project terms |
+| [research](research/_index.md)         | 1 | Design proposals + investigations not yet committed |
