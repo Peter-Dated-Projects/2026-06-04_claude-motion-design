@@ -24,13 +24,16 @@ use tauri_plugin_dialog::DialogExt;
 /// treats this specially (no error toast) -- a cancel is not a failure.
 const CANCELLED: &str = "cancelled";
 
-/// {appDataDir}/projects, created if missing. Mirrors projects.rs / zip.rs so the
-/// three stay consistent if the layout ever moves.
+/// {documentDir}/ClaudeMotion/projects, created if missing. MUST match
+/// projects.rs::projects_root(), claude_bridge.rs::project_dir(), and zip.rs --
+/// the four are hand-duplicated, so a move has to be applied to all of them or
+/// export reads a different folder than the live project store.
 fn projects_root(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
-        .app_data_dir()
-        .map_err(|e| format!("failed to resolve app data dir: {e}"))?
+        .document_dir()
+        .map_err(|e| format!("failed to resolve document dir: {e}"))?
+        .join("ClaudeMotion")
         .join("projects");
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create projects dir: {e}"))?;
     Ok(dir)

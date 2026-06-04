@@ -18,13 +18,15 @@ directory or different features silently operate on different folders:
 - `commands/zip.rs::projects_root()` — source/target for `export_project_zip`/`import_project_zip`.
 
 T-007 moved the root from `app_data_dir/projects` to
-`document_dir/ClaudeMotion/projects`, but its `touches` scope only covered
-`projects.rs` and `claude_bridge.rs`. The decision note (0002) and ticket both
-claimed the root lived in "two places" — that undercount missed export.rs and
-zip.rs. After T-007, projects are created/read under `~/Documents` while export
-and zip still read/write `app_data_dir/projects`, so export finds no project
-("project not found") and an import lands where `list_projects` never looks.
+`document_dir/ClaudeMotion/projects`. The ticket `touches` and decision note
+(0002) both claimed the root lived in "two places" — that undercount missed
+export.rs and zip.rs. The scope was expanded mid-ticket to cover all four (an
+atomic move; leaving export/zip stale would have hit the old empty app_data
+folder: export "project not found", imports landing where `list_projects` never
+looks), so as of T-007 all four resolve `document_dir().join("ClaudeMotion").join("projects")`.
 
-Fix: update `export.rs::projects_root()` and `zip.rs::projects_root()` to the
-same `document_dir().join("ClaudeMotion").join("projects")`. Better long-term:
-collapse all four onto one shared helper so the next move is a single edit.
+The trap is now latent, not active: the duplication remains. Any future move of
+the projects root MUST touch all four call sites in lockstep, or features
+silently diverge. Better long-term: collapse the four onto one shared helper so
+the next move is a single edit -- not done here to keep T-007 within a bounded
+scope, but worth a dedicated refactor.
