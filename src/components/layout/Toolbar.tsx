@@ -20,10 +20,10 @@ const DROPDOWN: React.CSSProperties = {
   minWidth: 200,
   maxHeight: 320,
   overflowY: "auto",
-  background: "#2a2a2a",
-  border: "1px solid #3a3a3a",
+  background: "#ffffff",
+  border: "1px solid #d4d4d4",
   borderRadius: 6,
-  boxShadow: "0 12px 32px rgba(0,0,0,0.5)",
+  boxShadow: "0 12px 32px rgba(0,0,0,0.15)",
   zIndex: 50,
   padding: 4,
 };
@@ -37,7 +37,7 @@ const ITEM: React.CSSProperties = {
   borderRadius: 4,
   padding: "7px 10px",
   fontSize: 13,
-  color: "#f6f6f6",
+  color: "#1f1f1f",
   cursor: "pointer",
 };
 
@@ -98,7 +98,7 @@ function Toolbar({ onOpenSettings, onNewProject }: ToolbarProps) {
                   style={{
                     ...ITEM,
                     background:
-                      p.slug === activeProject?.slug ? "#3a3a3a" : "transparent",
+                      p.slug === activeProject?.slug ? "#dbeafe" : "transparent",
                   }}
                   onClick={() => void pick(p.slug)}
                 >

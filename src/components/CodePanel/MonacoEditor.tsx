@@ -71,7 +71,7 @@ function MonacoEditor({
         language={languageForPath(path)}
         path={path}
         value={value}
-        theme="vs-dark"
+        theme="vs"
         onMount={handleMount}
         options={{ ...EDITOR_OPTIONS, readOnly }}
         loading={<div className="monaco-host__loading">Loading editor...</div>}

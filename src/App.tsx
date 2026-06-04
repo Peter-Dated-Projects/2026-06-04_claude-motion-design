@@ -98,15 +98,15 @@ function ToastStack({
           key={t.id}
           role="status"
           style={{
-            background: "#2a2a2a",
-            color: "#f6f6f6",
+            background: "#ffffff",
+            color: "#1f1f1f",
             border: `1px solid ${TOAST_COLORS[t.kind]}`,
             borderLeft: `4px solid ${TOAST_COLORS[t.kind]}`,
             borderRadius: 6,
             padding: "10px 12px",
             fontSize: 13,
             fontFamily: "Inter, sans-serif",
-            boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
             display: "flex",
             alignItems: "center",
             gap: 12,
@@ -139,7 +139,7 @@ function ToastStack({
             onClick={() => onDismiss(t.id)}
             style={{
               background: "transparent",
-              color: "#9a9a9a",
+              color: "#888",
               border: "none",
               fontSize: 15,
               lineHeight: 1,
@@ -515,7 +515,7 @@ function App() {
         onNewProject={() => setNewProjectOpen(true)}
       />
       <div
-        className={`panels mosaic-dark${isDragging ? " panels--dragging" : ""}`}
+        className={`panels mosaic-light${isDragging ? " panels--dragging" : ""}`}
         onDragStart={() => setIsDragging(true)}
         onDragEnd={() => setIsDragging(false)}
         onDrop={() => setIsDragging(false)}

@@ -18,12 +18,12 @@ interface ExitPayload {
   code: number | null;
 }
 
-// A dark theme that matches the app's panels.
+// A light theme that matches the app's panels.
 const TERMINAL_THEME = {
-  background: "#1a1a1a",
-  foreground: "#f6f6f6",
-  cursor: "#f6f6f6",
-  selectionBackground: "#3a3a3a",
+  background: "#ffffff",
+  foreground: "#1f1f1f",
+  cursor: "#1f1f1f",
+  selectionBackground: "#cfe0fb",
 };
 
 /**

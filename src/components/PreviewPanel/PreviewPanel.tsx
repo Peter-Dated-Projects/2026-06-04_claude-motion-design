@@ -34,14 +34,14 @@ const TOOLBAR_STYLE: React.CSSProperties = {
   alignItems: "center",
   gap: 8,
   padding: "6px 8px",
-  borderBottom: "1px solid #2a2a2a",
+  borderBottom: "1px solid #e0e0e0",
   flex: "0 0 auto",
 };
 
 const SELECT_STYLE: React.CSSProperties = {
-  background: "#1d1d1d",
-  color: "#ddd",
-  border: "1px solid #333",
+  background: "#ffffff",
+  color: "#333",
+  border: "1px solid #cfcfcf",
   borderRadius: 4,
   padding: "3px 6px",
   fontSize: 12,
@@ -52,7 +52,7 @@ const TOGGLE_STYLE: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 6,
-  border: "1px solid #333",
+  border: "1px solid #cfcfcf",
   borderRadius: 4,
   padding: "3px 8px",
   fontSize: 12,
@@ -411,9 +411,9 @@ function PreviewPanel({ code }: PreviewPanelProps) {
           type="button"
           style={{
             ...TOGGLE_STYLE,
-            color: showSafeZone ? "#ffd24a" : "#9aa",
-            borderColor: showSafeZone ? "#5a4a16" : "#333",
-            background: showSafeZone ? "#2a2410" : "#1d1d1d",
+            color: showSafeZone ? "#8a6d1b" : "#6a6a6a",
+            borderColor: showSafeZone ? "#e6d28a" : "#cfcfcf",
+            background: showSafeZone ? "#fff8e1" : "#ffffff",
           }}
           aria-pressed={showSafeZone}
           onClick={toggleSafeZone}
@@ -429,9 +429,9 @@ function PreviewPanel({ code }: PreviewPanelProps) {
             ...TOGGLE_STYLE,
             marginLeft: "auto",
             position: "relative",
-            color: showLog ? "#cfe" : "#9aa",
-            borderColor: showLog ? "#2a4a5a" : "#333",
-            background: showLog ? "#11242a" : "#1d1d1d",
+            color: showLog ? "#0e7490" : "#6a6a6a",
+            borderColor: showLog ? "#a5d8e6" : "#cfcfcf",
+            background: showLog ? "#e0f7fa" : "#ffffff",
           }}
           aria-pressed={showLog}
           onClick={() => setShowLog((v) => !v)}
@@ -469,7 +469,7 @@ function PreviewPanel({ code }: PreviewPanelProps) {
           flex: 1,
           minHeight: 0,
           overflow: "hidden",
-          background: "#000",
+          background: "#e9e9e9",
         }}
       >
         <div
@@ -524,10 +524,10 @@ function PreviewPanel({ code }: PreviewPanelProps) {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              color: "#9aa",
+              color: "#444",
               fontFamily: "sans-serif",
               fontSize: 13,
-              background: "rgba(0,0,0,0.6)",
+              background: "rgba(255,255,255,0.72)",
             }}
           >
             Compiling preview...
@@ -545,13 +545,13 @@ function PreviewPanel({ code }: PreviewPanelProps) {
               maxHeight: "50%",
               overflow: "auto",
               padding: "10px 12px",
-              background: "#3a0d0d",
-              color: "#ffb4b4",
+              background: "#fdecea",
+              color: "#b71c1c",
               fontFamily: "ui-monospace, monospace",
               fontSize: 12,
               lineHeight: 1.5,
               whiteSpace: "pre-wrap",
-              borderTop: "1px solid #802",
+              borderTop: "1px solid #f3b5b0",
             }}
           >
             {error}
@@ -561,9 +561,9 @@ function PreviewPanel({ code }: PreviewPanelProps) {
                   type="button"
                   onClick={startCompile}
                   style={{
-                    background: "#5a1616",
-                    color: "#ffd4d4",
-                    border: "1px solid #802",
+                    background: "#ffffff",
+                    color: "#b71c1c",
+                    border: "1px solid #e6a6a1",
                     borderRadius: 4,
                     padding: "4px 12px",
                     fontSize: 12,

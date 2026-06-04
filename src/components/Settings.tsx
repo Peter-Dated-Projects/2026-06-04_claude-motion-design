@@ -24,7 +24,7 @@ interface ClaudeCliInfo {
 const OVERLAY: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "rgba(0,0,0,0.6)",
+  background: "rgba(0,0,0,0.4)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -35,12 +35,12 @@ const OVERLAY: React.CSSProperties = {
 const CARD: React.CSSProperties = {
   width: 520,
   maxWidth: "92vw",
-  background: "#232323",
-  border: "1px solid #3a3a3a",
+  background: "#ffffff",
+  border: "1px solid #d4d4d4",
   borderRadius: 10,
   padding: 24,
-  boxShadow: "0 24px 80px rgba(0,0,0,0.6)",
-  color: "#f6f6f6",
+  boxShadow: "0 24px 80px rgba(0,0,0,0.25)",
+  color: "#1f1f1f",
 };
 
 const HEADER: React.CSSProperties = {
@@ -55,19 +55,19 @@ const ROW: React.CSSProperties = {
   flexDirection: "column",
   gap: 4,
   padding: "12px 0",
-  borderTop: "1px solid #333",
+  borderTop: "1px solid #e0e0e0",
 };
 
 const LABEL: React.CSSProperties = {
   fontSize: 12,
-  color: "#9a9a9a",
+  color: "#888",
   textTransform: "uppercase",
   letterSpacing: "0.04em",
 };
 
 const VALUE: React.CSSProperties = {
   fontSize: 13,
-  color: "#f6f6f6",
+  color: "#1f1f1f",
   fontFamily: "ui-monospace, monospace",
   wordBreak: "break-all",
 };
@@ -84,9 +84,9 @@ function dot(ok: boolean): React.CSSProperties {
 }
 
 const CLOSE_BTN: React.CSSProperties = {
-  background: "#2e2e2e",
-  color: "#f6f6f6",
-  border: "1px solid #3a3a3a",
+  background: "#ffffff",
+  color: "#1f1f1f",
+  border: "1px solid #cfcfcf",
   borderRadius: 6,
   width: 28,
   height: 28,
@@ -97,8 +97,8 @@ const CLOSE_BTN: React.CSSProperties = {
 
 const REFRESH_BTN: React.CSSProperties = {
   background: "transparent",
-  color: "#9ab",
-  border: "1px solid #3a3a3a",
+  color: "#3b82f6",
+  border: "1px solid #cfcfcf",
   borderRadius: 5,
   padding: "2px 8px",
   fontSize: 11,
@@ -108,9 +108,9 @@ const REFRESH_BTN: React.CSSProperties = {
 
 const PATH_INPUT: React.CSSProperties = {
   flex: 1,
-  background: "#1a1a1a",
-  color: "#f6f6f6",
-  border: "1px solid #3a3a3a",
+  background: "#ffffff",
+  color: "#1f1f1f",
+  border: "1px solid #cfcfcf",
   borderRadius: 5,
   padding: "5px 8px",
   fontSize: 12,
@@ -118,9 +118,9 @@ const PATH_INPUT: React.CSSProperties = {
 };
 
 const SMALL_BTN: React.CSSProperties = {
-  background: "#2e2e2e",
-  color: "#f6f6f6",
-  border: "1px solid #3a3a3a",
+  background: "#ffffff",
+  color: "#1f1f1f",
+  border: "1px solid #cfcfcf",
   borderRadius: 5,
   padding: "5px 10px",
   fontSize: 12,
@@ -247,7 +247,7 @@ function Settings({ open, onClose }: SettingsProps) {
           </span>
           <span style={{ ...LABEL, textTransform: "none", marginTop: 6 }}>
             Auto-detected (which claude):{" "}
-            <span style={{ fontFamily: "ui-monospace, monospace", color: "#cfcfcf" }}>
+            <span style={{ fontFamily: "ui-monospace, monospace", color: "#555" }}>
               {cli === null ? "..." : cli.detected ?? "not found on PATH"}
             </span>
           </span>

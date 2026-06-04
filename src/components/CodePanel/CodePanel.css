@@ -17,8 +17,8 @@
   flex: 0 0 180px;
   width: 180px;
   overflow: auto;
-  background: #1a1a1a;
-  border-right: 1px solid #2a2a2a;
+  background: #f7f7f7;
+  border-right: 1px solid #e0e0e0;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   user-select: none;
@@ -26,19 +26,19 @@
 
 .filetree__header {
   padding: 6px 10px;
-  color: #7a7f85;
+  color: #888;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  border-bottom: 1px solid #242424;
+  border-bottom: 1px solid #e6e6e6;
   position: sticky;
   top: 0;
-  background: #1a1a1a;
+  background: #f7f7f7;
 }
 
 .filetree__empty {
   padding: 10px;
-  color: #666;
+  color: #999;
   font-size: 11px;
 }
 
@@ -56,7 +56,7 @@
   appearance: none;
   border: none;
   background: transparent;
-  color: #c8ccd0;
+  color: #3a3a3a;
   text-align: left;
   padding: 3px 8px;
   font: inherit;
@@ -65,27 +65,27 @@
 }
 
 .filetree__row:hover {
-  background: #232323;
+  background: #ececec;
 }
 
 .filetree__row--active {
-  background: #2d3a4f;
-  color: #fff;
+  background: #dbeafe;
+  color: #1d4ed8;
 }
 
 .filetree__row--active:hover {
-  background: #324460;
+  background: #cfe0fb;
 }
 
 .filetree__chevron {
   display: inline-block;
   width: 10px;
-  color: #7a7f85;
+  color: #888;
   font-size: 10px;
 }
 
 .filetree__row--dir .filetree__name {
-  color: #d4d4d4;
+  color: #2a2a2a;
 }
 
 .filetree__name {
@@ -97,8 +97,8 @@
   margin-left: auto;
   padding: 0 5px;
   border-radius: 8px;
-  background: #3a4a2a;
-  color: #a3d977;
+  background: #dcedc8;
+  color: #558b2f;
   font-size: 9px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -117,17 +117,17 @@
   display: flex;
   align-items: stretch;
   flex: 0 0 auto;
-  background: #202020;
-  border-bottom: 1px solid #2a2a2a;
+  background: #ececec;
+  border-bottom: 1px solid #e0e0e0;
 }
 
 /* Toggle for the file-tree rail, pinned to the left of the tabs row. */
 .codepanel__tree-toggle {
   appearance: none;
   border: none;
-  border-right: 1px solid #2a2a2a;
+  border-right: 1px solid #e0e0e0;
   background: transparent;
-  color: #9aa0a6;
+  color: #777;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   line-height: 1;
@@ -137,8 +137,8 @@
 }
 
 .codepanel__tree-toggle:hover {
-  background: #2a2a2a;
-  color: #ddd;
+  background: #e0e0e0;
+  color: #333;
 }
 
 .codetabs__scroll {
@@ -154,9 +154,9 @@
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  background: #252525;
-  border-right: 1px solid #1a1a1a;
-  color: #9aa0a6;
+  background: #e4e4e4;
+  border-right: 1px solid #d4d4d4;
+  color: #777;
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   cursor: pointer;
@@ -165,13 +165,13 @@
 }
 
 .codetab:hover {
-  background: #2a2a2a;
+  background: #ededed;
 }
 
 .codetab--active {
-  background: #1e1e1e;
-  color: #fff;
-  border-top-color: #4a90d9;
+  background: #ffffff;
+  color: #1f1f1f;
+  border-top-color: #3b82f6;
 }
 
 .codetab__name {
@@ -183,7 +183,7 @@
   appearance: none;
   border: none;
   background: transparent;
-  color: #777;
+  color: #999;
   font-size: 13px;
   line-height: 1;
   padding: 0 2px;
@@ -192,15 +192,15 @@
 }
 
 .codetab__close:hover {
-  background: #444;
-  color: #ddd;
+  background: #d0d0d0;
+  color: #333;
 }
 
 .codepanel__copy {
   appearance: none;
-  border: 1px solid #3a3a3a;
-  background: #2a2a2a;
-  color: #ddd;
+  border: 1px solid #cfcfcf;
+  background: #ffffff;
+  color: #333;
   font-size: 11px;
   margin: 4px 8px;
   padding: 3px 10px;
@@ -212,8 +212,8 @@
 }
 
 .codepanel__copy:hover:not(:disabled) {
-  background: #333;
-  border-color: #4a4a4a;
+  background: #e8e8e8;
+  border-color: #bdbdbd;
 }
 
 .codepanel__copy:disabled {
@@ -226,7 +226,7 @@
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
-  background: #1e1e1e;
+  background: #ffffff;
 }
 
 .codepanel__placeholder {
@@ -235,7 +235,7 @@
   justify-content: center;
   width: 100%;
   height: 100%;
-  color: #666;
+  color: #999;
   font-size: 13px;
 }
 
@@ -246,9 +246,9 @@
   z-index: 3;
   padding: 4px 10px;
   border-radius: 4px;
-  background: rgba(40, 40, 40, 0.92);
-  border: 1px solid #3a3a3a;
-  color: #c9a227;
+  background: rgba(255, 248, 225, 0.96);
+  border: 1px solid #e6d28a;
+  color: #8a6d1b;
   font-size: 11px;
   font-family: Inter, sans-serif;
   pointer-events: none;
@@ -265,7 +265,7 @@
   justify-content: center;
   width: 100%;
   height: 100%;
-  color: #777;
+  color: #999;
   font-size: 13px;
 }
 
@@ -276,6 +276,6 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: rgba(15, 23, 42, 0.35);
+  background: rgba(148, 163, 184, 0.25);
   z-index: 2;
 }

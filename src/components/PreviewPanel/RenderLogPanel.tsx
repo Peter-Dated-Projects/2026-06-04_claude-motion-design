@@ -6,11 +6,11 @@ import {
 } from "../../store/renderLogStore";
 
 // Level -> text color. Errors red, warnings amber, info muted -- consistent with the
-// dark preview theme (the red error strip uses the same #ffb4b4 family).
+// light preview theme (the red error strip uses the same #b71c1c family).
 const LEVEL_COLOR: Record<RenderLogLevel, string> = {
-  error: "#ff7b7b",
-  warn: "#ffd24a",
-  info: "#8b94a0",
+  error: "#c5221f",
+  warn: "#b8860b",
+  info: "#6a6a6a",
 };
 
 const STAGE_LABEL: Record<RenderLogEntry["stage"], string> = {
@@ -53,8 +53,8 @@ function RenderLogPanel({ height }: RenderLogPanelProps) {
         flex: `0 0 ${height}px`,
         display: "flex",
         flexDirection: "column",
-        borderTop: "1px solid #2a2a2a",
-        background: "#0e0e0e",
+        borderTop: "1px solid #e0e0e0",
+        background: "#fafafa",
       }}
     >
       <div
@@ -63,7 +63,7 @@ function RenderLogPanel({ height }: RenderLogPanelProps) {
           alignItems: "center",
           justifyContent: "space-between",
           padding: "4px 8px",
-          borderBottom: "1px solid #1f1f1f",
+          borderBottom: "1px solid #ececec",
           flex: "0 0 auto",
         }}
       >
@@ -71,7 +71,7 @@ function RenderLogPanel({ height }: RenderLogPanelProps) {
           style={{
             fontSize: 11,
             fontFamily: "sans-serif",
-            color: "#8b94a0",
+            color: "#888",
             textTransform: "uppercase",
             letterSpacing: 0.5,
           }}
@@ -83,9 +83,9 @@ function RenderLogPanel({ height }: RenderLogPanelProps) {
           onClick={clear}
           disabled={entries.length === 0}
           style={{
-            background: "#1d1d1d",
-            color: entries.length === 0 ? "#555" : "#bbb",
-            border: "1px solid #333",
+            background: "#ffffff",
+            color: entries.length === 0 ? "#bbb" : "#444",
+            border: "1px solid #cfcfcf",
             borderRadius: 4,
             padding: "2px 8px",
             fontSize: 11,
@@ -112,7 +112,7 @@ function RenderLogPanel({ height }: RenderLogPanelProps) {
         }}
       >
         {entries.length === 0 ? (
-          <div style={{ color: "#555", fontStyle: "italic" }}>
+          <div style={{ color: "#999", fontStyle: "italic" }}>
             No render events yet.
           </div>
         ) : (
@@ -121,7 +121,7 @@ function RenderLogPanel({ height }: RenderLogPanelProps) {
               key={e.id}
               style={{ display: "flex", gap: 8, whiteSpace: "pre-wrap" }}
             >
-              <span style={{ color: "#555", flex: "0 0 auto" }}>
+              <span style={{ color: "#aaa", flex: "0 0 auto" }}>
                 {formatTime(e.ts)}
               </span>
               <span

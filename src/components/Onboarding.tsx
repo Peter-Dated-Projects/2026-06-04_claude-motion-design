@@ -29,7 +29,7 @@ interface OnboardingProps {
 const OVERLAY: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "rgba(0,0,0,0.6)",
+  background: "rgba(0,0,0,0.4)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -40,12 +40,12 @@ const OVERLAY: React.CSSProperties = {
 const CARD: React.CSSProperties = {
   width: 420,
   maxWidth: "90vw",
-  background: "#232323",
-  border: "1px solid #3a3a3a",
+  background: "#ffffff",
+  border: "1px solid #d4d4d4",
   borderRadius: 10,
   padding: 24,
-  boxShadow: "0 24px 80px rgba(0,0,0,0.6)",
-  color: "#f6f6f6",
+  boxShadow: "0 24px 80px rgba(0,0,0,0.25)",
+  color: "#1f1f1f",
 };
 
 const TITLE: React.CSSProperties = {
@@ -58,22 +58,22 @@ const BODY: React.CSSProperties = {
   margin: "0 0 18px",
   fontSize: 13,
   lineHeight: 1.6,
-  color: "#cfcfcf",
+  color: "#555",
 };
 
 const CODE: React.CSSProperties = {
   fontFamily: "ui-monospace, monospace",
-  background: "#1a1a1a",
-  border: "1px solid #333",
+  background: "#f0f0f0",
+  border: "1px solid #d4d4d4",
   borderRadius: 4,
   padding: "1px 5px",
 };
 
 const INPUT: React.CSSProperties = {
   width: "100%",
-  background: "#1a1a1a",
-  color: "#f6f6f6",
-  border: "1px solid #3a3a3a",
+  background: "#ffffff",
+  color: "#1f1f1f",
+  border: "1px solid #cfcfcf",
   borderRadius: 6,
   padding: "9px 11px",
   fontSize: 14,
@@ -88,7 +88,7 @@ const ROW: React.CSSProperties = {
 
 function primaryBtn(disabled: boolean): React.CSSProperties {
   return {
-    background: disabled ? "#2e3f63" : "#3b82f6",
+    background: disabled ? "#93b4f0" : "#3b82f6",
     color: "#fff",
     border: "none",
     borderRadius: 6,
@@ -100,9 +100,9 @@ function primaryBtn(disabled: boolean): React.CSSProperties {
 }
 
 const SECONDARY_BTN: React.CSSProperties = {
-  background: "#2e2e2e",
-  color: "#f6f6f6",
-  border: "1px solid #3a3a3a",
+  background: "#ffffff",
+  color: "#1f1f1f",
+  border: "1px solid #cfcfcf",
   borderRadius: 6,
   padding: "8px 16px",
   fontSize: 13,

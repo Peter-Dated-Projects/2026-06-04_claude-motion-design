@@ -4,8 +4,8 @@
   line-height: 20px;
   font-weight: 400;
 
-  color: #f6f6f6;
-  background-color: #1a1a1a;
+  color: #1f1f1f;
+  background-color: #f3f3f3;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -41,8 +41,8 @@ body,
   justify-content: space-between;
   height: 44px;
   padding: 0 12px;
-  background: #232323;
-  border-bottom: 1px solid #333;
+  background: #f0f0f0;
+  border-bottom: 1px solid #d4d4d4;
   flex: 0 0 auto;
 }
 
@@ -54,13 +54,17 @@ body,
 }
 
 .toolbar button {
-  background: #2e2e2e;
-  color: #f6f6f6;
-  border: 1px solid #3a3a3a;
+  background: #ffffff;
+  color: #1f1f1f;
+  border: 1px solid #cfcfcf;
   border-radius: 6px;
   padding: 6px 10px;
   font-size: 13px;
   cursor: pointer;
+}
+
+.toolbar button:hover:not(:disabled) {
+  background: #e8e8e8;
 }
 
 .toolbar button:disabled {
@@ -76,7 +80,7 @@ body,
 
 .toolbar__caret {
   font-size: 10px;
-  color: #9a9a9a;
+  color: #888;
 }
 
 .toolbar__gear {
@@ -104,7 +108,7 @@ body,
 .export-menu__caret,
 .project-menu__caret {
   font-size: 10px;
-  color: #9a9a9a;
+  color: #888;
 }
 
 .export-menu__dropdown,
@@ -117,10 +121,10 @@ body,
   flex-direction: column;
   min-width: 160px;
   padding: 4px;
-  background: #1d1d1d;
-  border: 1px solid #2a2a2a;
+  background: #ffffff;
+  border: 1px solid #d4d4d4;
   border-radius: 6px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
 }
 
 .export-menu__item,
@@ -133,13 +137,13 @@ body,
   border-radius: 4px;
   padding: 6px 10px;
   font-size: 13px;
-  color: #f6f6f6;
+  color: #1f1f1f;
   cursor: pointer;
 }
 
 .export-menu__item:hover:not(:disabled),
 .project-menu__item:hover:not(:disabled) {
-  background: #2a2a2a;
+  background: #ececec;
 }
 
 .export-menu__item:disabled,
@@ -158,19 +162,19 @@ body,
   padding: 6px 10px;
   font-size: 12px;
   border-radius: 6px;
-  border: 1px solid #2a2a2a;
-  background: #1d1d1d;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  border: 1px solid #d4d4d4;
+  background: #ffffff;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
 }
 
 .export-menu__toast--success,
 .project-menu__toast--success {
-  color: #7ee787;
+  color: #137333;
 }
 
 .export-menu__toast--error,
 .project-menu__toast--error {
-  color: #ff7b72;
+  color: #c5221f;
 }
 
 /* --- Panels (react-mosaic shell) --- */
@@ -190,20 +194,20 @@ body,
 
 .panel--chat,
 .panel--terminal {
-  background: #1d1d1d;
+  background: #ffffff;
 }
 
 .panel--code {
-  background: #1a1a1a;
+  background: #ffffff;
 }
 
 .panel--preview {
-  background: #161616;
+  background: #f3f3f3;
 }
 
 .panel__placeholder {
   margin: auto;
-  color: #777;
+  color: #999;
   font-size: 13px;
   letter-spacing: 0.02em;
 }
@@ -218,44 +222,47 @@ body,
   pointer-events: none;
 }
 
-/* --- Mosaic dark theme override -------------------------------------------- */
-/* react-mosaic ships a light theme by default; repaint the chrome (tile bg,
-   window header, splitter, drop preview) to the app's dark palette. */
-.mosaic-dark {
-  background: #161616;
+/* --- Mosaic light theme override ------------------------------------------- */
+/* react-mosaic ships the Blueprint light theme by default, but <Mosaic> is
+   mounted with className="" (the empty string drops the bundled bp3 theme so
+   its high-specificity rules don't fight ours). So we repaint the chrome
+   (tile bg, window header, splitter, drop preview) to the app's light palette
+   from scratch. */
+.mosaic-light {
+  background: #f3f3f3;
 }
 
-.mosaic-dark .mosaic-root {
+.mosaic-light .mosaic-root {
   top: 0;
   right: 0;
   bottom: 0;
   left: 0;
 }
 
-.mosaic-dark .mosaic-tile {
+.mosaic-light .mosaic-tile {
   margin: 1px;
 }
 
 /* Each tile's body hosts a .panel section that should fill it. */
-.mosaic-dark .mosaic-window,
-.mosaic-dark .mosaic-window-body {
-  background: #1a1a1a;
+.mosaic-light .mosaic-window,
+.mosaic-light .mosaic-window-body {
+  background: #ffffff;
   display: flex;
   flex-direction: column;
 }
 
-.mosaic-dark .mosaic-window-body {
+.mosaic-light .mosaic-window-body {
   flex: 1 1 auto;
   min-height: 0;
 }
 
-.mosaic-dark .mosaic-window .panel {
+.mosaic-light .mosaic-window .panel {
   flex: 1 1 auto;
 }
 
 /* Title bar = drag handle. */
-.mosaic-dark .mosaic-window-title {
-  color: #cfcfcf;
+.mosaic-light .mosaic-window-title {
+  color: #555;
   font-family: Inter, sans-serif;
   font-size: 12px;
   font-weight: 500;
@@ -263,31 +270,31 @@ body,
   text-transform: uppercase;
 }
 
-.mosaic-dark .mosaic-window-toolbar {
-  background: #232323;
-  border-bottom: 1px solid #333;
+.mosaic-light .mosaic-window-toolbar {
+  background: #f0f0f0;
+  border-bottom: 1px solid #d4d4d4;
   box-shadow: none;
   height: 30px;
 }
 
-.mosaic-dark .mosaic-window-controls {
+.mosaic-light .mosaic-window-controls {
   display: none;
 }
 
 /* Splitter between tiles. */
-.mosaic-dark .mosaic-split {
+.mosaic-light .mosaic-split {
   background: transparent;
 }
 
-.mosaic-dark .mosaic-split:hover {
+.mosaic-light .mosaic-split:hover {
   background: none;
 }
 
-.mosaic-dark .mosaic-split .mosaic-split-line {
-  box-shadow: 0 0 0 1px #2a2a2a;
+.mosaic-light .mosaic-split .mosaic-split-line {
+  box-shadow: 0 0 0 1px #d4d4d4;
 }
 
-.mosaic-dark .mosaic-split:hover .mosaic-split-line {
+.mosaic-light .mosaic-split:hover .mosaic-split-line {
   box-shadow: 0 0 0 1px #3b82f6;
 }
 
@@ -300,9 +307,9 @@ body,
    (hovered) zone as a strong, high-contrast preview of exactly where the panel
    will land. The edge zones grow 30% -> 50% on hover; transitioning the inset
    positions animates that as a smooth "snap into place" preview. */
-.mosaic-dark .drop-target-container .drop-target {
-  background: rgba(59, 130, 246, 0.08);
-  border: 2px dashed rgba(96, 165, 250, 0.35);
+.mosaic-light .drop-target-container .drop-target {
+  background: rgba(59, 130, 246, 0.1);
+  border: 2px dashed rgba(37, 99, 235, 0.4);
   border-radius: 4px;
   transition:
     opacity 120ms ease,
@@ -317,25 +324,25 @@ body,
 
 /* Hint the four edge zones during a drag; the full-tile center zone stays
    hidden until hovered so it does not blanket the others. */
-.mosaic-dark .drop-target-container.-dragging .drop-target.left,
-.mosaic-dark .drop-target-container.-dragging .drop-target.right,
-.mosaic-dark .drop-target-container.-dragging .drop-target.top,
-.mosaic-dark .drop-target-container.-dragging .drop-target.bottom {
+.mosaic-light .drop-target-container.-dragging .drop-target.left,
+.mosaic-light .drop-target-container.-dragging .drop-target.right,
+.mosaic-light .drop-target-container.-dragging .drop-target.top,
+.mosaic-light .drop-target-container.-dragging .drop-target.bottom {
   opacity: 0.55;
 }
 
 /* Active zone: an obvious, high-contrast preview of the new area. */
-.mosaic-dark .drop-target-container .drop-target.drop-target-hover {
+.mosaic-light .drop-target-container .drop-target.drop-target-hover {
   opacity: 1;
-  background: rgba(59, 130, 246, 0.32);
-  border: 2px solid #60a5fa;
+  background: rgba(59, 130, 246, 0.22);
+  border: 2px solid #3b82f6;
   box-shadow:
-    inset 0 0 0 1px rgba(147, 197, 253, 0.6),
-    inset 0 0 24px rgba(59, 130, 246, 0.35),
-    0 0 0 1px rgba(96, 165, 250, 0.5);
+    inset 0 0 0 1px rgba(37, 99, 235, 0.5),
+    inset 0 0 24px rgba(59, 130, 246, 0.25),
+    0 0 0 1px rgba(59, 130, 246, 0.4);
 }
 
-.mosaic-dark .mosaic-window-additional-actions-bar {
+.mosaic-light .mosaic-window-additional-actions-bar {
   display: none;
 }
 
@@ -346,10 +353,10 @@ body,
   justify-content: space-between;
   height: 28px;
   padding: 0 12px;
-  background: #232323;
-  border-top: 1px solid #333;
+  background: #f0f0f0;
+  border-top: 1px solid #d4d4d4;
   font-size: 12px;
-  color: #9a9a9a;
+  color: #6a6a6a;
   flex: 0 0 auto;
 }
 
@@ -360,13 +367,13 @@ body,
 }
 
 .statusbar__sep {
-  color: #444;
+  color: #c4c4c4;
 }
 
 .statusbar__toggle {
   background: transparent;
-  color: #9a9a9a;
-  border: 1px solid #3a3a3a;
+  color: #6a6a6a;
+  border: 1px solid #cfcfcf;
   border-radius: 5px;
   padding: 3px 8px;
   font-size: 12px;
@@ -374,7 +381,7 @@ body,
 }
 
 .statusbar__toggle[aria-pressed="true"] {
-  color: #f6f6f6;
+  color: #1d4ed8;
   border-color: #3b82f6;
-  background: rgba(59, 130, 246, 0.18);
+  background: rgba(59, 130, 246, 0.12);
 }
