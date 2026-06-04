@@ -230,6 +230,15 @@
         window.addEventListener("message", function (event) {
           var data = event.data || {};
 
+          // Readiness query: the parent re-asks whether we're ready (e.g. after it
+          // remounted and lost the one-time sandboxReady below, or to recover from a
+          // load-event/sandboxReady race). Re-announce so the parent can flush any
+          // bundle it parked while it thought we weren't ready. Idempotent.
+          if (data.type === "ping") {
+            post({ type: "sandboxReady" });
+            return;
+          }
+
           if (data.type === "render") {
             (async function () {
               try {

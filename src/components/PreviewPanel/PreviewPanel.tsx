@@ -277,6 +277,14 @@ function PreviewPanel({ code }: PreviewPanelProps) {
         pendingBundleRef.current = data.bundle;
         if (sandboxReadyRef.current) {
           postToSandbox({ type: "render", bundle: data.bundle });
+        } else {
+          // We have a bundle but never saw the iframe's one-time `sandboxReady`.
+          // This happens after a Fast-Refresh remount: refs reset to not-ready but
+          // the memoized srcDoc iframe never reloads, so it never re-announces and
+          // we'd deadlock here forever (the watchdog would trip every time). Ping
+          // it; the sandbox re-posts `sandboxReady`, whose handler flushes the
+          // bundle we just parked. Self-heals instead of stranding the preview.
+          postToSandbox({ type: "ping" });
         }
         // Don't clear the watchdog yet -- the round-trip isn't done until the
         // sandbox reports renderOk/renderError.
@@ -482,6 +490,15 @@ function PreviewPanel({ code }: PreviewPanelProps) {
               // window or network.
               sandbox="allow-scripts"
               srcDoc={srcDoc}
+              // A (re)load means a fresh sandbox that hasn't announced readiness yet,
+              // so drop the stale ready flag and ping it. The load event and the
+              // sandbox's one-time `sandboxReady` post can race; the ping makes the
+              // sandbox re-announce so a lost initial message still self-heals (its
+              // handler flushes any bundle parked in pendingBundleRef).
+              onLoad={() => {
+                sandboxReadyRef.current = false;
+                postToSandbox({ type: "ping" });
+              }}
               style={{
                 position: "absolute",
                 inset: 0,
