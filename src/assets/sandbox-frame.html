@@ -91,6 +91,12 @@
 
         var playerRef = null;
         var root = null;
+        // True only while a compiled bundle is executing inside runBundle(). The
+        // persistent error listeners below use it to stay OUT of the way during
+        // bundle execution -- those errors are already captured one-shot in runBundle
+        // and surfaced to the parent as renderError; the persistent listeners exist to
+        // catch throws that happen LATER, during playback (after renderOk).
+        var bundleRunning = false;
         // Render props that are NOT controllable via the player ref -- changing speed or
         // loop means re-rendering the Player with new props.
         var renderState = {
@@ -102,6 +108,45 @@
         function post(msg) {
           parent.postMessage(msg, "*");
         }
+
+        // Persistent capture of runtime errors thrown DURING playback -- e.g. a bad
+        // interpolate range or an undefined helper that only blows up on a later frame,
+        // long after renderOk. These would otherwise be swallowed (the preview just
+        // freezes/blanks) since the one-shot listener in runBundle is already gone.
+        // Distinct from that one-shot: this stays live for the whole session.
+        var lastRuntimeMsg = null;
+        var lastRuntimeTs = 0;
+        function reportRuntimeError(message) {
+          // Bundle-execution errors are already surfaced as renderError; don't double-
+          // report them here.
+          if (bundleRunning) return;
+          var now = Date.now();
+          // Throttle identical consecutive messages so a per-frame throw can't flood
+          // the parent's render log.
+          if (message === lastRuntimeMsg && now - lastRuntimeTs < 1000) {
+            lastRuntimeTs = now;
+            return;
+          }
+          lastRuntimeMsg = message;
+          lastRuntimeTs = now;
+          post({ type: "runtimeError", message: message });
+        }
+        window.addEventListener("error", function (event) {
+          var err = event && event.error;
+          var message =
+            (err && err.message) ||
+            (event && event.message) ||
+            "Runtime error during playback.";
+          reportRuntimeError(message);
+        });
+        window.addEventListener("unhandledrejection", function (event) {
+          var reason = event && event.reason;
+          var message =
+            (reason && reason.message) ||
+            (reason != null ? String(reason) : "") ||
+            "Unhandled promise rejection during playback.";
+          reportRuntimeError(message);
+        });
 
         function renderPlayer() {
           if (!renderState.Component || !root) return;
@@ -157,6 +202,7 @@
             var s = document.createElement("script");
             s.src = url;
             var runtimeError = null;
+            bundleRunning = true;
             function onError(event) {
               if (runtimeError) return; // keep the first error
               runtimeError =
@@ -165,6 +211,7 @@
             }
             window.addEventListener("error", onError);
             function cleanup() {
+              bundleRunning = false;
               window.removeEventListener("error", onError);
               URL.revokeObjectURL(url);
             }

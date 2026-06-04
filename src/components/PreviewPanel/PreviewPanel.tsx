@@ -12,10 +12,15 @@ import PhoneBezel, {
 } from "./PhoneBezel";
 import SafeZoneOverlay from "./SafeZoneOverlay";
 import ReplayControls from "./ReplayControls";
+import RenderLogPanel from "./RenderLogPanel";
 import {
   useUIStore,
   type SafeZonePlatform,
 } from "../../store/uiStore";
+import {
+  useRenderLogStore,
+  selectErrorCount,
+} from "../../store/renderLogStore";
 
 const PLATFORM_OPTIONS: { value: SafeZonePlatform; label: string }[] = [
   { value: "universal", label: "Universal" },
@@ -78,6 +83,32 @@ function EyeIcon({ open }: { open: boolean }) {
   );
 }
 
+// List/log glyph for the render-log toggle. Inline SVG (currentColor), matching the
+// EyeIcon approach -- no icon-font dependency.
+function LogIcon() {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      focusable={false}
+    >
+      <line x1={8} y1={6} x2={21} y2={6} />
+      <line x1={8} y1={12} x2={21} y2={12} />
+      <line x1={8} y1={18} x2={21} y2={18} />
+      <line x1={3} y1={6} x2={3.01} y2={6} />
+      <line x1={3} y1={12} x2={3.01} y2={12} />
+      <line x1={3} y1={18} x2={3.01} y2={18} />
+    </svg>
+  );
+}
+
 // Fallback animation shown when no project is open yet (empty code). Once a project's
 // animation.tsx is loaded or Claude generates code, the parent passes it via `code`.
 const SAMPLE_CODE = `import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, spring } from 'remotion';
@@ -119,6 +150,7 @@ type SandboxMessage =
   | { type: "sandboxReady" }
   | { type: "renderOk"; fps?: number; durationInFrames?: number }
   | { type: "renderError"; message: string }
+  | { type: "runtimeError"; message: string }
   | {
       type: "frameUpdate";
       frame: number;
@@ -126,6 +158,9 @@ type SandboxMessage =
       fps?: number;
       isPlaying: boolean;
     };
+
+// Height of the open render-log drawer.
+const LOG_DRAWER_HEIGHT = 160;
 
 // Defaults until the sandbox reports the animation's resolved fps. Must match the
 // DEFAULT_FPS in sandbox-frame.html.
@@ -167,6 +202,12 @@ function PreviewPanel({ code }: PreviewPanelProps) {
   const { showSafeZone, safeZonePlatform, toggleSafeZone, setSafeZonePlatform } =
     useUIStore();
 
+  // Render log: append pipeline events here; the drawer (RenderLogPanel) reads the
+  // store directly. `add` is a stable zustand action, safe in effect deps.
+  const logAdd = useRenderLogStore((s) => s.add);
+  const logErrorCount = useRenderLogStore(selectErrorCount);
+  const [showLog, setShowLog] = useState(false);
+
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const workerRef = useRef<Worker | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -205,16 +246,17 @@ function PreviewPanel({ code }: PreviewPanelProps) {
     setError(null);
     setCanRetry(false);
     setIsLoading(true);
+    logAdd("info", "compile", "Compiling animation...");
     workerRef.current?.postMessage({ type: "compile", code: source, id: gen });
     watchdogRef.current = setTimeout(() => {
       watchdogRef.current = null;
       setIsLoading(false);
-      setError(
-        "Preview timed out -- the compiler or renderer did not respond.",
-      );
+      const msg = "Preview timed out -- the compiler or renderer did not respond.";
+      logAdd("error", "watchdog", msg);
+      setError(msg);
       setCanRetry(true);
     }, WATCHDOG_MS);
-  }, [source, clearWatchdog]);
+  }, [source, clearWatchdog, logAdd]);
 
   // --- Worker: TSX -> compiled IIFE -------------------------------------------------
   useEffect(() => {
@@ -231,6 +273,7 @@ function PreviewPanel({ code }: PreviewPanelProps) {
       if (typeof data.id === "number" && data.id !== generationRef.current) return;
       if (data.type === "compiled") {
         setError(null);
+        logAdd("info", "compile", `Compiled (${data.bundle.length} bytes)`);
         pendingBundleRef.current = data.bundle;
         if (sandboxReadyRef.current) {
           postToSandbox({ type: "render", bundle: data.bundle });
@@ -239,13 +282,16 @@ function PreviewPanel({ code }: PreviewPanelProps) {
         // sandbox reports renderOk/renderError.
       } else if (data.type === "error") {
         clearWatchdog();
+        logAdd("error", "compile", data.message);
         setError(data.message);
         setIsLoading(false);
       }
     };
     worker.onerror = (ev) => {
       clearWatchdog();
-      setError(ev.message || "Compiler worker crashed.");
+      const msg = ev.message || "Compiler worker crashed.";
+      logAdd("error", "compile", msg);
+      setError(msg);
       setIsLoading(false);
     };
 
@@ -253,7 +299,7 @@ function PreviewPanel({ code }: PreviewPanelProps) {
       worker.terminate();
       workerRef.current = null;
     };
-  }, [postToSandbox, clearWatchdog]);
+  }, [postToSandbox, clearWatchdog, logAdd]);
 
   // --- Sandbox iframe -> parent messages --------------------------------------------
   useEffect(() => {
@@ -270,13 +316,24 @@ function PreviewPanel({ code }: PreviewPanelProps) {
         }
       } else if (data.type === "renderOk") {
         clearWatchdog();
+        const detail =
+          typeof data.fps === "number" && typeof data.durationInFrames === "number"
+            ? ` (${data.fps} fps, ${data.durationInFrames} frames)`
+            : "";
+        logAdd("info", "render", `Rendered OK${detail}`);
         setError(null);
         setCanRetry(false);
         setIsLoading(false);
       } else if (data.type === "renderError") {
         clearWatchdog();
+        logAdd("error", "render", data.message);
         setError(data.message);
         setIsLoading(false);
+      } else if (data.type === "runtimeError") {
+        // A throw DURING playback, after renderOk -- the sandbox's persistent error
+        // listener forwards these. Log it but do NOT touch error/loading state: the
+        // preview is already mounted, and clobbering it would hide a working frame.
+        logAdd("error", "runtime", data.message);
       } else if (data.type === "frameUpdate") {
         // Read-only: track playback state so the safe-zone overlay auto-hides during
         // play. Replay COMMANDS belong to ReplayControls; we never post from here.
@@ -289,7 +346,7 @@ function PreviewPanel({ code }: PreviewPanelProps) {
 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [postToSandbox, clearWatchdog]);
+  }, [postToSandbox, clearWatchdog, logAdd]);
 
   // --- Compile whenever the code changes --------------------------------------------
   // startCompile's identity changes with `source`, so this re-fires on every edit;
@@ -356,6 +413,44 @@ function PreviewPanel({ code }: PreviewPanelProps) {
         >
           <EyeIcon open={showSafeZone} />
           Safe Zone
+        </button>
+
+        <button
+          type="button"
+          style={{
+            ...TOGGLE_STYLE,
+            marginLeft: "auto",
+            position: "relative",
+            color: showLog ? "#cfe" : "#9aa",
+            borderColor: showLog ? "#2a4a5a" : "#333",
+            background: showLog ? "#11242a" : "#1d1d1d",
+          }}
+          aria-pressed={showLog}
+          onClick={() => setShowLog((v) => !v)}
+          title="Toggle render log"
+        >
+          <LogIcon />
+          Log
+          {!showLog && logErrorCount > 0 && (
+            <span
+              aria-label={`${logErrorCount} render errors`}
+              style={{
+                marginLeft: 2,
+                minWidth: 16,
+                height: 16,
+                padding: "0 4px",
+                borderRadius: 8,
+                background: "#b3261e",
+                color: "#fff",
+                fontSize: 10,
+                fontWeight: 700,
+                lineHeight: "16px",
+                textAlign: "center",
+              }}
+            >
+              {logErrorCount > 99 ? "99+" : logErrorCount}
+            </span>
+          )}
         </button>
       </div>
 
@@ -468,6 +563,8 @@ function PreviewPanel({ code }: PreviewPanelProps) {
       </div>
 
       <ReplayControls iframeRef={iframeRef} containerRef={containerRef} fps={fps} />
+
+      {showLog && <RenderLogPanel height={LOG_DRAWER_HEIGHT} />}
     </section>
   );
 }
