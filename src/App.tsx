@@ -2,14 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  Mosaic,
-  MosaicWindow,
-  getLeaves,
-  type MosaicNode,
-} from "react-mosaic-component";
 import "react-mosaic-component/react-mosaic-component.css";
 import "./App.css";
+import SplitLayout, {
+  getLeaves,
+  type LayoutNode,
+  type PanelId,
+} from "./components/PanelLayout/SplitLayout";
 import Toolbar from "./components/layout/Toolbar";
 import StatusBar from "./components/layout/StatusBar";
 import TerminalPanel from "./components/TerminalPanel/TerminalPanel";
@@ -23,12 +22,11 @@ import type { ProjectFile } from "./types";
 
 const LAST_PROJECT_KEY = "claude-motion:lastProject";
 
-// --- Mosaic panel shell ------------------------------------------------------
-// The three panels live as draggable tiles in a react-mosaic layout: grab a
-// tile's header to re-tile into any horizontal/vertical split, drag dividers to
-// resize. Replaces the old hand-rolled fixed-width resize logic.
-type PanelId = "terminal" | "editor" | "preview";
-
+// --- Panel shell -------------------------------------------------------------
+// The three panels render through a custom recursive SplitLayout: each split has
+// a draggable gutter to resize. The layout tree keeps react-mosaic's node shape
+// (leaf = panel id; parent = a row/column split) so persistence and show/hide
+// keep working; PanelId / LayoutNode now come from SplitLayout.
 const PANEL_TITLES: Record<PanelId, string> = {
   terminal: "Claude",
   editor: "Editor",
@@ -41,7 +39,7 @@ const PANEL_ORDER: PanelId[] = ["terminal", "editor", "preview"];
 
 const LAYOUT_KEY = "claude-motion:panelLayout";
 
-const DEFAULT_LAYOUT: MosaicNode<PanelId> = {
+const DEFAULT_LAYOUT: LayoutNode = {
   direction: "row",
   first: "terminal",
   second: {
@@ -55,10 +53,10 @@ const DEFAULT_LAYOUT: MosaicNode<PanelId> = {
 
 // A null layout means every panel is hidden -- a valid (if degenerate) state we
 // render as an empty state rather than crashing Mosaic on an empty tree.
-function loadLayout(): MosaicNode<PanelId> | null {
+function loadLayout(): LayoutNode | null {
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
-    if (raw) return JSON.parse(raw) as MosaicNode<PanelId> | null;
+    if (raw) return JSON.parse(raw) as LayoutNode | null;
   } catch {
     // Corrupt/absent layout falls back to the default.
   }
@@ -69,9 +67,9 @@ function loadLayout(): MosaicNode<PanelId> | null {
 // parent into the surviving sibling so the rest of the user's arrangement is
 // preserved. Returns null when the tree becomes empty (last panel removed).
 function removeLeaf(
-  tree: MosaicNode<PanelId> | null,
+  tree: LayoutNode | null,
   id: PanelId,
-): MosaicNode<PanelId> | null {
+): LayoutNode | null {
   if (tree == null) return null;
   if (typeof tree === "string") return tree === id ? null : tree;
   const first = removeLeaf(tree.first, id);
@@ -85,9 +83,9 @@ function removeLeaf(
 // leaf; otherwise it docks as a new row split, on the left if it sorts before
 // every currently-shown panel (per PANEL_ORDER), else on the right.
 function addLeaf(
-  tree: MosaicNode<PanelId> | null,
+  tree: LayoutNode | null,
   id: PanelId,
-): MosaicNode<PanelId> {
+): LayoutNode {
   if (tree == null) return id;
   const idIndex = PANEL_ORDER.indexOf(id);
   const placeFirst = getLeaves(tree).every(
@@ -270,7 +268,7 @@ function PanelsControls({
 }
 
 function App() {
-  const [layout, setLayout] = useState<MosaicNode<PanelId> | null>(loadLayout);
+  const [layout, setLayout] = useState<LayoutNode | null>(loadLayout);
   // True while a mosaic tile is being dragged by its header. We use it to drop
   // pointer events on tile content (the preview iframe / Monaco) for the
   // duration of the drag -- otherwise those heavy children swallow the native
@@ -582,7 +580,7 @@ function App() {
 
   // Persist the tile layout so a rearranged/resized workspace survives reloads.
   // Accepts null (all panels hidden) -- stored as-is so the empty state sticks.
-  const applyLayout = useCallback((next: MosaicNode<PanelId> | null) => {
+  const applyLayout = useCallback((next: LayoutNode | null) => {
     setLayout(next);
     try {
       localStorage.setItem(LAYOUT_KEY, JSON.stringify(next));
@@ -662,19 +660,11 @@ function App() {
           onReset={resetLayout}
         />
         {layout ? (
-          <Mosaic<PanelId>
-            className=""
+          <SplitLayout
             value={layout}
             onChange={applyLayout}
-            renderTile={(id, path) => (
-              <MosaicWindow<PanelId>
-                path={path}
-                title={PANEL_TITLES[id]}
-                toolbarControls={<></>}
-              >
-                {renderPanel(id)}
-              </MosaicWindow>
-            )}
+            renderPanel={renderPanel}
+            panelTitles={PANEL_TITLES}
           />
         ) : (
           <div className="panels-empty">

@@ -1,0 +1,152 @@
+/* Custom pointer-driven split layout. Light theme matching the app's panel
+   chrome (the same palette the old .mosaic-light overrides used). */
+
+.split-layout {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  background: #f3f3f3;
+}
+
+/* A parent split: two panes with a gutter between them. */
+.split-parent {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.split-parent--row {
+  flex-direction: row;
+}
+
+.split-parent--column {
+  flex-direction: column;
+}
+
+/* Wraps each child (leaf or nested split) and carries its flex sizing. */
+.split-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* A leaf: header bar over the panel body. */
+.split-leaf {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  margin: 1px;
+  background: #ffffff;
+}
+
+.split-leaf__header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 12px;
+  background: #f0f0f0;
+  border-bottom: 1px solid #d4d4d4;
+  color: #555;
+  font-family: Inter, sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.split-leaf__body {
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The panel component mounted into the body should fill it. */
+.split-leaf__body > * {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Draggable gutter. ~6px hit area with a thin visible line that strengthens on
+   hover/active. */
+.split-gutter {
+  flex: 0 0 6px;
+  position: relative;
+  z-index: 1;
+  background: transparent;
+  touch-action: none;
+}
+
+.split-gutter--col {
+  cursor: col-resize;
+}
+
+.split-gutter--row {
+  cursor: row-resize;
+}
+
+/* The visible line sits centered in the hit area. */
+.split-gutter::after {
+  content: "";
+  position: absolute;
+  background: #d4d4d4;
+  transition: background 0.1s ease;
+}
+
+.split-gutter--col::after {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-0.5px);
+}
+
+.split-gutter--row::after {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-0.5px);
+}
+
+.split-gutter:hover::after,
+.split-gutter--active::after {
+  background: #1d4ed8;
+}
+
+.split-gutter--col:hover::after,
+.split-gutter--col.split-gutter--active::after {
+  width: 2px;
+}
+
+.split-gutter--row:hover::after,
+.split-gutter--row.split-gutter--active::after {
+  height: 2px;
+}
+
+/* Full-viewport shield mounted only while resizing. It sits above the preview
+   iframe / Monaco so pointermove keeps reaching the layout instead of being
+   swallowed by those children. Transparent but pointer-interactive. */
+.split-shield {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: transparent;
+  touch-action: none;
+}
+
+.split-shield--col {
+  cursor: col-resize;
+}
+
+.split-shield--row {
+  cursor: row-resize;
+}
