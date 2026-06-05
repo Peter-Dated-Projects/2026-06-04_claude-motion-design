@@ -58,6 +58,17 @@
   letter-spacing: 0.04em;
   text-transform: uppercase;
   user-select: none;
+  cursor: grab;
+  touch-action: none;
+}
+
+.split-leaf__header:active {
+  cursor: grabbing;
+}
+
+/* The leaf currently being dragged dims so its destination reads clearly. */
+.split-leaf--dragging {
+  opacity: 0.5;
 }
 
 .split-leaf__body {
@@ -149,4 +160,33 @@
 
 .split-shield--row {
   cursor: row-resize;
+}
+
+/* Drag-to-rearrange shield. Same role as the resize shield: a fixed, viewport-
+   covering layer mounted while a header drag is in flight so the preview iframe
+   / Monaco never swallow the pointer stream. */
+.split-drag-shield {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: transparent;
+  cursor: grabbing;
+  touch-action: none;
+}
+
+/* Highlight over the region a drop would land in. Positioned in viewport coords
+   from the target leaf's frozen rect; sits above the shield and is inert so it
+   never intercepts the drag's pointer events. */
+.split-drop-zone {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  background: rgba(29, 78, 216, 0.15);
+  border: 2px solid #1d4ed8;
+  border-radius: 2px;
+  transition:
+    left 0.08s ease,
+    top 0.08s ease,
+    width 0.08s ease,
+    height 0.08s ease;
 }
