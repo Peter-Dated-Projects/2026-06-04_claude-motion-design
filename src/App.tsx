@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import "react-mosaic-component/react-mosaic-component.css";
 import "./App.css";
 import SplitLayout, {
   getLeaves,
@@ -24,9 +23,9 @@ const LAST_PROJECT_KEY = "claude-motion:lastProject";
 
 // --- Panel shell -------------------------------------------------------------
 // The three panels render through a custom recursive SplitLayout: each split has
-// a draggable gutter to resize. The layout tree keeps react-mosaic's node shape
-// (leaf = panel id; parent = a row/column split) so persistence and show/hide
-// keep working; PanelId / LayoutNode now come from SplitLayout.
+// a draggable gutter to resize. The layout tree is a simple binary tree
+// (leaf = panel id; parent = a row/column split) that drives persistence and
+// show/hide; PanelId / LayoutNode come from SplitLayout.
 const PANEL_TITLES: Record<PanelId, string> = {
   terminal: "Claude",
   editor: "Editor",
@@ -52,7 +51,7 @@ const DEFAULT_LAYOUT: LayoutNode = {
 };
 
 // A null layout means every panel is hidden -- a valid (if degenerate) state we
-// render as an empty state rather than crashing Mosaic on an empty tree.
+// render as an empty state rather than handing SplitLayout an empty tree.
 function loadLayout(): LayoutNode | null {
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
@@ -269,12 +268,6 @@ function PanelsControls({
 
 function App() {
   const [layout, setLayout] = useState<LayoutNode | null>(loadLayout);
-  // True while a mosaic tile is being dragged by its header. We use it to drop
-  // pointer events on tile content (the preview iframe / Monaco) for the
-  // duration of the drag -- otherwise those heavy children swallow the native
-  // HTML5 drag as the cursor passes over them, react-mosaic never sees a valid
-  // drop, and the layout snaps back to where it started.
-  const [isDragging, setIsDragging] = useState(false);
 
   const projects = useProjectStore((s) => s.projects);
   const activeProject = useProjectStore((s) => s.activeProject);
@@ -648,12 +641,7 @@ function App() {
         onOpenSettings={() => setSettingsOpen(true)}
         onNewProject={() => setNewProjectOpen(true)}
       />
-      <div
-        className={`panels mosaic-light${isDragging ? " panels--dragging" : ""}`}
-        onDragStart={() => setIsDragging(true)}
-        onDragEnd={() => setIsDragging(false)}
-        onDrop={() => setIsDragging(false)}
-      >
+      <div className="panels">
         <PanelsControls
           visible={visiblePanels}
           onToggle={togglePanel}
