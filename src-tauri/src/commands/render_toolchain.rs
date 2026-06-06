@@ -32,11 +32,28 @@ pub struct ToolchainManifest {
 // Produced by `scripts/build-render-toolchain.mjs` and hosted as a GitHub release
 // asset (the repo is public, so the asset downloads without auth). To publish a new
 // toolchain: rebuild, upload, and update url + sha256 + size_mb + version here.
+//
+// VERSION NOTE: `version` keys the install dir (`toolchain_dir`). It is NOT just
+// the Remotion version anymore -- it carries a `-r<N>` revision suffix
+// (TOOLCHAIN_REVISION in the build script) so a contents-only rebuild (e.g.
+// re-pinning bundled CLIs without changing Remotion) still produces a new dir and
+// forces existing installs to re-fetch. Bumping this is what invalidates a stale
+// install that predates the bundled IG CLIs. Keep it in lockstep with the build
+// script's printed `version`.
+//
+// SHA256 NOTE: this archive now bundles bun + yt-dlp + ffmpeg + ffprobe in
+// addition to node + the Remotion render closure, so the contents (and sha256)
+// changed and the archive must be rebuilt + re-uploaded. Until that out-of-band
+// step is done, `sha256` is the REPLACE_ME placeholder, which `install_render_*`
+// treats as "not configured yet" and reports with an actionable rebuild message
+// -- preferable to a silent checksum mismatch, or to installing a stale MP4-only
+// archive that the IG checks would then (correctly) flag as missing its CLIs
+// while `is_installed` reports the toolchain present so it never re-fetches.
 pub const TOOLCHAIN: ToolchainManifest = ToolchainManifest {
-    version: "4.0.473",
-    url: "https://github.com/Peter-Dated-Projects/2026-06-04_claude-motion-design/releases/download/render-toolchain-v4.0.473/render-toolchain-4.0.473-darwin-arm64.tar.gz",
-    sha256: "9e902c9682b8412a8a96991689695834740349452ca78a63579f45661cb7a3a1",
-    size_mb: 77,
+    version: "4.0.473-r2",
+    url: "https://github.com/Peter-Dated-Projects/2026-06-04_claude-motion-design/releases/download/render-toolchain-v4.0.473-r2/render-toolchain-4.0.473-r2-darwin-arm64.tar.gz",
+    sha256: "REPLACE_ME",
+    size_mb: 230,
 };
 
 /// Sentinel returned by `export_mp4` when no render toolchain is available (and
@@ -68,6 +85,65 @@ pub fn render_script(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(toolchain_dir(app)?.join("render-mp4.mjs"))
 }
 
+/// The unpacked `bin/` dir holding all bundled executables (node + the IG CLIs).
+///
+/// This is the primitive the IG-pipeline subprocess layer needs: the Bun stages
+/// resolve `bun`/`yt-dlp`/`ffmpeg`/`ffprobe` by BARE NAME off PATH (see
+/// scripts/ig-pipeline/lib/spawn.ts), so the spawning code prepends this dir to
+/// the child's PATH rather than injecting absolute paths per binary.
+pub fn toolchain_bin_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(toolchain_dir(app)?.join("bin"))
+}
+
+// Per-binary absolute-path accessors. The IG subprocess layer spawns by bare name
+// off a PATH built from `toolchain_bin_dir`, so these are for presence checks /
+// direct invocation by the future IG command layer (registered in lib.rs by a
+// separate ticket); hence #[allow(dead_code)] until that lands.
+
+/// Absolute path to the bundled `bun` runtime (may not exist yet -- callers that
+/// need a presence guarantee use [`ig_tools_installed`]).
+#[allow(dead_code)]
+pub fn bun_bin(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(toolchain_bin_dir(app)?.join("bun"))
+}
+
+/// Absolute path to the bundled `yt-dlp` binary.
+#[allow(dead_code)]
+pub fn ytdlp_bin(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(toolchain_bin_dir(app)?.join("yt-dlp"))
+}
+
+/// Absolute path to the bundled `ffmpeg` binary.
+#[allow(dead_code)]
+pub fn ffmpeg_bin(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(toolchain_bin_dir(app)?.join("ffmpeg"))
+}
+
+/// Absolute path to the bundled `ffprobe` binary.
+#[allow(dead_code)]
+pub fn ffprobe_bin(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(toolchain_bin_dir(app)?.join("ffprobe"))
+}
+
+/// Whether all four IG-pipeline CLIs (bun + yt-dlp + ffmpeg + ffprobe) are present
+/// in the installed toolchain.
+///
+/// Deliberately SEPARATE from [`is_installed`] (which gates MP4 render on node +
+/// render-mp4.mjs). Folding the CLI checks into `is_installed` would make an
+/// older MP4-only toolchain -- or the dev fallback -- read as not-installed and
+/// regress MP4 render. This keys off the actual binary files, so a stale install
+/// dir that predates the bundled CLIs reads as "IG tools missing" (rather than
+/// falsely present off a `.ok` marker alone), prompting a re-fetch.
+pub fn ig_tools_installed(app: &AppHandle) -> bool {
+    let Ok(bin) = toolchain_bin_dir(app) else {
+        return false;
+    };
+    bin.join("bun").is_file()
+        && bin.join("yt-dlp").is_file()
+        && bin.join("ffmpeg").is_file()
+        && bin.join("ffprobe").is_file()
+}
+
 pub fn is_installed(app: &AppHandle) -> bool {
     let Ok(dir) = toolchain_dir(app) else {
         return false;
@@ -96,6 +172,10 @@ pub struct ToolchainStatus {
     pub installed: bool,
     pub version: String,
     pub size_mb: u32,
+    /// Whether the bundled IG-pipeline CLIs (bun + yt-dlp + ffmpeg + ffprobe) are
+    /// present. Reported separately from `installed` (which is about MP4 render)
+    /// so the two capabilities can be surfaced independently in the UI.
+    pub ig_tools_installed: bool,
 }
 
 #[tauri::command]
@@ -106,6 +186,7 @@ pub fn render_toolchain_status(app: AppHandle) -> ToolchainStatus {
         installed: is_installed(&app) || dev_fallback().is_some(),
         version: TOOLCHAIN.version.to_string(),
         size_mb: TOOLCHAIN.size_mb,
+        ig_tools_installed: ig_tools_installed(&app),
     }
 }
 
@@ -213,15 +294,20 @@ fn install_toolchain_blocking(app: AppHandle) -> Result<(), String> {
         .unpack(&extract_into)
         .map_err(|e| format!("failed to unpack toolchain: {e}"))?;
 
-    // Make the node binary executable (tar usually preserves this, but be sure).
+    // Make the bundled binaries executable (tar usually preserves this, but be
+    // sure). The IG CLIs are fetched mach-o files (not copied from a running
+    // process like `node`), so re-marking them after unpack matters more here.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let node = extract_into.join("bin").join("node");
-        if let Ok(meta) = fs::metadata(&node) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o755);
-            let _ = fs::set_permissions(&node, perms);
+        let bin = extract_into.join("bin");
+        for name in ["node", "bun", "yt-dlp", "ffmpeg", "ffprobe"] {
+            let path = bin.join(name);
+            if let Ok(meta) = fs::metadata(&path) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o755);
+                let _ = fs::set_permissions(&path, perms);
+            }
         }
     }
 
