@@ -63,7 +63,14 @@ function RenderLogPanel({ height }: RenderLogPanelProps) {
   return (
     <div
       style={{
-        flex: `0 0 ${height}px`,
+        // `0 1` (not `0 0`): the drawer prefers `height`px but is allowed to shrink
+        // when the panel is too short to fit toolbar + replay bar + a full-height
+        // drawer. Without the shrink, the section (overflow:hidden) would clip the
+        // drawer's bottom off-screen -- exactly where the newest entries (errors)
+        // live -- with no outer scroll to reach them. minHeight:0 lets the inner
+        // scroll area shrink with it so its overflowY scroll stays reachable.
+        flex: `0 1 ${height}px`,
+        minHeight: 0,
         display: "flex",
         flexDirection: "column",
         borderTop: "1px solid #e0e0e0",
