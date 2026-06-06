@@ -204,6 +204,11 @@ pub async fn export_mp4(
     out_path: String,
     codec: String,
     quality: String,
+    // GIF target frame rate. Only meaningful for codec == "gif"; the script drops
+    // frames to hit it. None for video codecs (and older callers).
+    gif_fps: Option<f64>,
+    // GIF lossy-compression level ("none" | "light" | "strong"). gifsicle post-process.
+    gif_compression: Option<String>,
 ) -> Result<String, String> {
     let dir = projects_root(&app)?.join(&slug);
     if !dir.is_dir() {
@@ -229,7 +234,18 @@ pub async fn export_mp4(
     // main thread). Progress events are emitted from inside.
     let out_for_render = out.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        run_render(&app, &node, &script, &cwd, &dir, &out_for_render, &codec, &quality)
+        run_render(
+            &app,
+            &node,
+            &script,
+            &cwd,
+            &dir,
+            &out_for_render,
+            &codec,
+            &quality,
+            gif_fps,
+            gif_compression.as_deref(),
+        )
     })
     .await
     .map_err(|e| format!("render task failed: {e}"))?
@@ -247,13 +263,26 @@ fn run_render(
     out: &Path,
     codec: &str,
     quality: &str,
+    gif_fps: Option<f64>,
+    gif_compression: Option<&str>,
 ) -> Result<String, String> {
-    let mut child = Command::new(node)
-        .arg(script)
+    let mut cmd = Command::new(node);
+    cmd.arg(script)
         .arg(dir)
         .arg(out)
         .arg(codec)
-        .arg(quality)
+        .arg(quality);
+    // Positional GIF args: 5th = target fps, 6th = lossy-compression level. Pass
+    // them only when set so video renders keep the 4-arg shape the script expects.
+    // They travel together for GIF (the modal always sends both), so the 6th arg
+    // never lands in the 5th's slot.
+    if let Some(fps) = gif_fps {
+        cmd.arg(fps.to_string());
+        if let Some(level) = gif_compression {
+            cmd.arg(level);
+        }
+    }
+    let mut child = cmd
         .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

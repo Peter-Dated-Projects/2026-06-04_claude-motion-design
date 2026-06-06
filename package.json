@@ -36,6 +36,7 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.6.0",
     "esbuild": "^0.25.0",
+    "gifsicle": "^7.0.1",
     "typescript": "~5.8.3",
     "vite": "^7.0.4"
   }

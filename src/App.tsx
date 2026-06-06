@@ -832,7 +832,7 @@ function App() {
       <RenderModal
         open={videoExportOpen}
         slug={activeProject?.slug ?? null}
-        code={code}
+        files={previewFileMap}
         onClose={closeVideoExport}
       />
 

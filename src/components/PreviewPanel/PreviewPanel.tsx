@@ -18,7 +18,8 @@ import {
   type SafeZonePlatform,
 } from "../../store/uiStore";
 import {
-  useRenderLogStore,
+  createRenderLogStore,
+  RenderLogProvider,
   selectErrorCount,
 } from "../../store/renderLogStore";
 import { ENTRY_FILE } from "../CodePanel/CodePanel";
@@ -208,9 +209,13 @@ interface PreviewPanelProps {
   /** Start a layout/motion pass. When omitted, the pass-trigger controls are hidden
    *  (e.g. RenderModal's render-preview, which has no live PTY session to drive). */
   onStartPass?: (mode: "layout" | "motion") => void;
+  /** Compact mode for hosting inside another surface (e.g. RenderModal). Drops the
+   *  Log toggle + the full render-log drawer so a compile error isn't shown twice --
+   *  the in-preview error strip already carries the full message. */
+  embedded?: boolean;
 }
 
-function PreviewPanel({ files, code, passMode, onStartPass }: PreviewPanelProps) {
+function PreviewPanel({ files, code, passMode, onStartPass, embedded }: PreviewPanelProps) {
   // Pre-built once; future code edits only re-post a compiled bundle, not a new srcdoc.
   const srcDoc = useMemo(buildSrcDoc, []);
 
@@ -246,10 +251,15 @@ function PreviewPanel({ files, code, passMode, onStartPass }: PreviewPanelProps)
   const { showSafeZone, safeZonePlatform, toggleSafeZone, setSafeZonePlatform } =
     useUIStore();
 
-  // Render log: append pipeline events here; the drawer (RenderLogPanel) reads the
-  // store directly. `add` is a stable zustand action, safe in effect deps.
-  const logAdd = useRenderLogStore((s) => s.add);
-  const logErrorCount = useRenderLogStore(selectErrorCount);
+  // Render log: each PreviewPanel owns its own store so two live previews (the main
+  // editor preview and RenderModal's export preview, mounted at once) don't share one
+  // bucket and double-log every compile. Provided down to RenderLogPanel via context.
+  // `add` is a stable zustand action, safe in effect deps.
+  const logStoreRef = useRef<ReturnType<typeof createRenderLogStore>>();
+  if (!logStoreRef.current) logStoreRef.current = createRenderLogStore();
+  const useLogStore = logStoreRef.current;
+  const logAdd = useLogStore((s) => s.add);
+  const logErrorCount = useLogStore(selectErrorCount);
   const [showLog, setShowLog] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -461,6 +471,7 @@ function PreviewPanel({ files, code, passMode, onStartPass }: PreviewPanelProps)
   }, []);
 
   return (
+   <RenderLogProvider value={useLogStore}>
     <section
       className="panel panel--preview"
       style={{ flexDirection: "column" }}
@@ -532,6 +543,7 @@ function PreviewPanel({ files, code, passMode, onStartPass }: PreviewPanelProps)
           </span>
         )}
 
+        {!embedded && (
         <button
           type="button"
           style={{
@@ -569,6 +581,7 @@ function PreviewPanel({ files, code, passMode, onStartPass }: PreviewPanelProps)
             </span>
           )}
         </button>
+        )}
       </div>
 
       <div
@@ -690,8 +703,9 @@ function PreviewPanel({ files, code, passMode, onStartPass }: PreviewPanelProps)
 
       <ReplayControls iframeRef={iframeRef} containerRef={containerRef} fps={fps} />
 
-      {showLog && <RenderLogPanel height={LOG_DRAWER_HEIGHT} />}
+      {showLog && !embedded && <RenderLogPanel height={LOG_DRAWER_HEIGHT} />}
     </section>
+   </RenderLogProvider>
   );
 }
 

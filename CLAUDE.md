@@ -111,6 +111,25 @@ Rust `#[tauri::command]`; the backend pushes streams via `emit` → frontend
   non-functional and should migrate to the same native event (reading bytes from the
   path via the backend).
 
+## Writing to humans
+
+When you write prose for a person — chat replies, status updates, explanations —
+keep it conversational and plain, like talking to a colleague out loud. This is
+about human-facing text only; code, comments, and commit messages follow the
+surrounding conventions.
+
+- Lead with the answer; add the "why" only if it's needed.
+- Short paragraphs and plain sentences over dense bullet stacks. Reach for a list
+  only when you're genuinely enumerating things.
+- Everyday words. If a term has no plainer alternative, define it inline the first
+  time.
+- Skip decorative formatting — no emoji, no ASCII-art dividers, minimal bold.
+- State what's done, what isn't, and what's uncertain, plainly. No hedging filler,
+  no false confidence.
+
+Do not invoke any voice/text-to-speech tooling from this repo — this is a writing
+style, not an output channel.
+
 ## Other docs
 - `SETUP.md` — onboarding + smoke tests
 - `PLAN.md` — roadmap / task tracking

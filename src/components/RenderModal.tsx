@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import PreviewPanel from "./PreviewPanel/PreviewPanel";
+import { ENTRY_FILE } from "./CodePanel/CodePanel";
 import { CloseIcon } from "./icons";
 
 // Video-export modal. Opens BEFORE rendering: pick a save location, a format +
@@ -36,6 +37,85 @@ const QUALITIES = [
   { key: "low", label: "Low" },
 ];
 
+// Composition dimensions (fixed; see render-mp4.mjs / the preview sandbox).
+const COMP_WIDTH = 1080;
+const COMP_HEIGHT = 1920;
+
+// For a GIF, "Quality" controls only the output resolution: the scale applied to
+// the 1080x1920 composition. Frame rate is a separate control. Keep in sync with
+// GIF_SCALE_BY_QUALITY in scripts/render-mp4.mjs.
+const GIF_SCALE_BY_QUALITY: Record<string, number> = {
+  high: 0.5,
+  medium: 0.375,
+  low: 0.25,
+};
+
+// GIF frame-rate choices. The render script drops frames to hit the target
+// (every Nth source frame), so values above the animation's own fps just render
+// every frame. 15 is a sensible default for shareable GIFs.
+const GIF_FPS_OPTIONS = [30, 24, 15, 10];
+const DEFAULT_GIF_FPS = 15;
+
+// Lossy gifsicle post-process levels. The size multipliers are rough averages of
+// the savings gifsicle yields at each level, used only to nudge the estimate.
+// Keep keys in sync with GIF_COMPRESS_ARGS in scripts/render-mp4.mjs.
+const GIF_COMPRESSION_OPTIONS = [
+  { key: "none", label: "None", factor: 1 },
+  { key: "light", label: "Light", factor: 0.4 },
+  { key: "strong", label: "Strong", factor: 0.2 },
+];
+
+// Default timing if the animation doesn't export fps / durationInFrames. Must
+// match DEFAULT_FPS / DEFAULT_DURATION_IN_FRAMES in scripts/render-mp4.mjs.
+const DEFAULT_FPS = 30;
+const DEFAULT_DURATION_IN_FRAMES = 150;
+
+// Rough bytes per (pixel x output-frame) for a GIF, calibrated from a real render
+// (405x720, 60 frames -> ~1.92 MB). GIF size is content-dependent (palette, motion,
+// flat vs. busy), so this is an order-of-magnitude estimate, not a guarantee.
+const GIF_BYTES_PER_PIXEL_FRAME = 0.11;
+
+// Pull fps + durationInFrames out of the animation source the same way the render
+// script does: explicit `export const fps` / `durationInFrames`, else a
+// `export const config = { fps, durationInFrames }`, else the defaults.
+function readTiming(src: string | undefined): { fps: number; durationInFrames: number } {
+  const num = (re: RegExp, fallback: number) => {
+    const m = src?.match(re);
+    const n = m ? Number(m[1]) : NaN;
+    return isFinite(n) && n > 0 ? n : fallback;
+  };
+  return {
+    fps: num(/\bfps\s*[=:]\s*([0-9]*\.?[0-9]+)/, DEFAULT_FPS),
+    durationInFrames: num(
+      /\bdurationInFrames\s*[=:]\s*([0-9]*\.?[0-9]+)/,
+      DEFAULT_DURATION_IN_FRAMES,
+    ),
+  };
+}
+
+// Estimate a GIF's file size from its settings. everyNthFrame mirrors the render
+// script: round(sourceFps / targetFps), floored at 1 (can't add frames).
+function estimateGifBytes(
+  quality: string,
+  gifFps: number,
+  compression: string,
+  timing: { fps: number; durationInFrames: number },
+): number {
+  const scale = GIF_SCALE_BY_QUALITY[quality] ?? GIF_SCALE_BY_QUALITY.high;
+  const w = Math.round(COMP_WIDTH * scale);
+  const h = Math.round(COMP_HEIGHT * scale);
+  const everyNthFrame = Math.max(1, Math.round(timing.fps / gifFps));
+  const outFrames = Math.max(1, Math.ceil(timing.durationInFrames / everyNthFrame));
+  const factor =
+    GIF_COMPRESSION_OPTIONS.find((c) => c.key === compression)?.factor ?? 1;
+  return w * h * outFrames * GIF_BYTES_PER_PIXEL_FRAME * factor;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
 const INSTALL_PHASE_LABEL: Record<string, string> = {
   download: "Downloading",
   verify: "Verifying",
@@ -47,7 +127,10 @@ type Phase = "config" | "installing" | "rendering" | "done" | "error";
 interface RenderModalProps {
   open: boolean;
   slug: string | null;
-  code?: string;
+  /** The project's full `.ts`/`.tsx` map (siblings + `animation.tsx`). The preview
+   *  bundles `animation.tsx` against this, so relative imports like `./theme` resolve
+   *  here exactly as they do in the main editor preview. */
+  files?: Record<string, string>;
   onClose: () => void;
 }
 
@@ -77,10 +160,12 @@ const CARD: React.CSSProperties = {
   overflow: "hidden",
 };
 
-function RenderModal({ open, slug, code, onClose }: RenderModalProps) {
+function RenderModal({ open, slug, files, onClose }: RenderModalProps) {
   const [phase, setPhase] = useState<Phase>("config");
   const [formatKey, setFormatKey] = useState("h264");
   const [quality, setQuality] = useState("high");
+  const [gifFps, setGifFps] = useState(DEFAULT_GIF_FPS);
+  const [gifCompression, setGifCompression] = useState("none");
   const [outPath, setOutPath] = useState<string | null>(null);
   const [renderProgress, setRenderProgress] = useState(0);
   const [install, setInstall] = useState<{ phase: string; progress: number } | null>(
@@ -91,6 +176,22 @@ function RenderModal({ open, slug, code, onClose }: RenderModalProps) {
 
   const format = FORMATS.find((f) => f.key === formatKey) ?? FORMATS[0];
   const busy = phase === "installing" || phase === "rendering";
+
+  // GIF-only derived values: output resolution (from quality) and an estimated
+  // file size (from resolution x frame count, calibrated from a real render).
+  const isGif = format.codec === "gif";
+  const gifScale = GIF_SCALE_BY_QUALITY[quality] ?? GIF_SCALE_BY_QUALITY.high;
+  const gifDims = `${Math.round(COMP_WIDTH * gifScale)} × ${Math.round(COMP_HEIGHT * gifScale)}`;
+  const gifEstimate = isGif
+    ? formatBytes(
+        estimateGifBytes(
+          quality,
+          gifFps,
+          gifCompression,
+          readTiming(files?.[ENTRY_FILE]),
+        ),
+      )
+    : null;
 
   // Reset to a clean config state each time the modal opens.
   useEffect(() => {
@@ -143,6 +244,8 @@ function RenderModal({ open, slug, code, onClose }: RenderModalProps) {
         outPath,
         codec: format.codec,
         quality,
+        gifFps: isGif ? gifFps : null,
+        gifCompression: isGif ? gifCompression : null,
       });
       setSavedPath(path);
       setPhase("done");
@@ -225,7 +328,7 @@ function RenderModal({ open, slug, code, onClose }: RenderModalProps) {
         <div className="rendermodal__body">
           {/* Live preview of what will render. */}
           <div className="rendermodal__preview">
-            <PreviewPanel code={code} />
+            <PreviewPanel files={files} embedded />
           </div>
 
           {/* Right rail: config, or progress/result by phase. */}
@@ -247,20 +350,60 @@ function RenderModal({ open, slug, code, onClose }: RenderModalProps) {
                   </select>
                 </label>
 
-                {format.codec !== "gif" && (
+                <label className="rendermodal__field">
+                  <span className="rendermodal__label">
+                    {isGif ? "Quality (resolution)" : "Quality"}
+                  </span>
+                  <select
+                    className="rendermodal__select"
+                    value={quality}
+                    onChange={(e) => setQuality(e.target.value)}
+                  >
+                    {QUALITIES.map((q) => (
+                      <option key={q.key} value={q.key}>
+                        {q.label}
+                      </option>
+                    ))}
+                  </select>
+                  {isGif && <span className="rendermodal__hint">{gifDims}</span>}
+                </label>
+
+                {isGif && (
                   <label className="rendermodal__field">
-                    <span className="rendermodal__label">Quality</span>
+                    <span className="rendermodal__label">Frame rate</span>
                     <select
                       className="rendermodal__select"
-                      value={quality}
-                      onChange={(e) => setQuality(e.target.value)}
+                      value={gifFps}
+                      onChange={(e) => setGifFps(Number(e.target.value))}
                     >
-                      {QUALITIES.map((q) => (
-                        <option key={q.key} value={q.key}>
-                          {q.label}
+                      {GIF_FPS_OPTIONS.map((f) => (
+                        <option key={f} value={f}>
+                          {f} fps
                         </option>
                       ))}
                     </select>
+                  </label>
+                )}
+
+                {isGif && (
+                  <label className="rendermodal__field">
+                    <span className="rendermodal__label">Compression (lossy)</span>
+                    <select
+                      className="rendermodal__select"
+                      value={gifCompression}
+                      onChange={(e) => setGifCompression(e.target.value)}
+                    >
+                      {GIF_COMPRESSION_OPTIONS.map((c) => (
+                        <option key={c.key} value={c.key}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                    {gifEstimate && (
+                      <span className="rendermodal__hint">
+                        Est. size ~{gifEstimate}
+                      </span>
+                    )}
                   </label>
                 )}
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import {
-  useRenderLogStore,
+  useRenderLogStoreCtx,
   type RenderLogEntry,
   type RenderLogLevel,
 } from "../../store/renderLogStore";
@@ -37,8 +37,9 @@ interface RenderLogPanelProps {
  *  only when open (the toolbar toggle owns open/closed state). Auto-scrolls to the
  *  newest entry; text is monospace + selectable so a user can copy an error. */
 function RenderLogPanel({ height }: RenderLogPanelProps) {
-  const entries = useRenderLogStore((s) => s.entries);
-  const clear = useRenderLogStore((s) => s.clear);
+  const useLogStore = useRenderLogStoreCtx();
+  const entries = useLogStore((s) => s.entries);
+  const clear = useLogStore((s) => s.clear);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Whether the view is pinned to the bottom. Stays true while the user sits at the
   // newest entry; flips false the moment they scroll up to read history. Only when
