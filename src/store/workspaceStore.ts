@@ -101,23 +101,26 @@ const IG_LAYOUT: LayoutNode = {
 // singletons; "IG" is an additive stage over its own four panel slots.
 export const WORKSPACE_DEFS: WorkspaceDef[] = [
   {
-    id: "editing",
-    name: "Editing",
-    icon: "edit",
-    availablePanels: [...ALL_PANELS],
-    defaultLayout: DEFAULT_LAYOUT,
-  },
-  {
     id: "ig",
     name: "IG",
     icon: "instagram",
     availablePanels: [...IG_PANELS],
     defaultLayout: IG_LAYOUT,
   },
+  {
+    id: "editing",
+    name: "Editing",
+    icon: "edit",
+    availablePanels: [...ALL_PANELS],
+    defaultLayout: DEFAULT_LAYOUT,
+  },
 ];
 
 const DEFS_BY_ID = new Map(WORKSPACE_DEFS.map((d) => [d.id, d]));
-const FALLBACK_ID = WORKSPACE_DEFS[0].id;
+// Tab render order (above) puts IG left of Editing, but the app should still
+// open in the Editing workspace, so pin the fallback/default explicitly rather
+// than keying it off WORKSPACE_DEFS[0].
+const FALLBACK_ID = "editing";
 
 // --- Persisted user state --------------------------------------------------
 const STATE_KEY = "claude-motion:workspaceState";
