@@ -1,0 +1,4 @@
+# Bun configuration for the ig-pipeline runtime island.
+# Tests live next to the code as *.test.ts and run with `bun test`.
+[test]
+root = "."
