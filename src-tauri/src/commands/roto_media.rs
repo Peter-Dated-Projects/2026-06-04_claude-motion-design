@@ -21,9 +21,13 @@
 //! video registry to enumerate -- the frontend loads a source via a file picker.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
+
+use crate::commands::render_toolchain;
 
 // ---------------------------------------------------------------------------
 // Payload schema (crosses to the frontend -- camelCase)
@@ -166,4 +170,106 @@ pub fn list_rotoscope_outputs(app: AppHandle, slug: String) -> Result<Vec<RotoOu
     // the folder, so sort by name).
     outputs.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(outputs)
+}
+
+// ---------------------------------------------------------------------------
+// trim_video (clip-range trim before upload)
+// ---------------------------------------------------------------------------
+
+/// Resolve the ffmpeg binary: prefer the bundled one from the render toolchain
+/// (the app must NOT assume ffmpeg is on PATH -- see CLAUDE.md). Falls back to a
+/// bare `ffmpeg` only as a dev convenience when the toolchain isn't installed.
+/// Mirrors `resolve_ffmpeg` in rotoscoping.rs (kept local to avoid widening that
+/// module's surface for one more caller).
+fn resolve_ffmpeg(app: &AppHandle) -> PathBuf {
+    if let Ok(bundled) = render_toolchain::ffmpeg_bin(app) {
+        if bundled.is_file() {
+            return bundled;
+        }
+    }
+    PathBuf::from("ffmpeg")
+}
+
+/// A short locally-unique id for the scratch filename: nanos-since-epoch plus a
+/// process-lifetime atomic counter, so two trims in the same nanosecond differ.
+fn next_local_id() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{nanos}_{n}")
+}
+
+/// Trim a source video to the half-open range [start_secs, end_secs) into a
+/// throwaway temp file, returning its absolute path. Re-encodes with x264 at a
+/// near-lossless CRF (a stream copy can't cut at an arbitrary, non-keyframe
+/// boundary), matching the no-compress path of rotoscoping.rs::clip_video. The
+/// caller (RotoVideoPanel's submit flow) uploads the returned clip; the
+/// downstream `rotoscope_video` re-clips it frame-accurately from the rebased
+/// reference frame, so this only needs to bound the range.
+///
+/// NOTE: the returned file lives in the OS temp dir and is NOT cleaned up here --
+/// `rotoscope_video` removes only its own scratch clip, not this input. The OS
+/// reclaims temp eventually; a future ticket could delete it post-job.
+#[tauri::command]
+pub fn trim_video(
+    app: AppHandle,
+    path: String,
+    start_secs: f64,
+    end_secs: f64,
+) -> Result<String, String> {
+    if !(end_secs > start_secs) {
+        return Err(format!(
+            "invalid clip range: end ({end_secs}) must be greater than start ({start_secs})"
+        ));
+    }
+    let start = start_secs.max(0.0);
+    let duration = end_secs - start;
+
+    let ffmpeg = resolve_ffmpeg(&app);
+    let dest = std::env::temp_dir().join(format!("claudemotion_trim_{}.mp4", next_local_id()));
+    let dest_s = dest.to_string_lossy().to_string();
+    let start_s = format!("{start}");
+    // `-t` (duration) instead of `-to` so the seek (`-ss`) and length compose
+    // correctly when both are output options.
+    let dur_s = format!("{duration}");
+
+    let output = std::process::Command::new(&ffmpeg)
+        .args([
+            "-y",
+            "-i",
+            &path,
+            "-ss",
+            &start_s,
+            "-t",
+            &dur_s,
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            &dest_s,
+        ])
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                render_toolchain::TOOLCHAIN_MISSING.to_string()
+            } else {
+                format!("failed to launch ffmpeg: {e}")
+            }
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail: Vec<&str> = stderr.lines().rev().take(8).collect();
+        let msg = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+        return Err(format!("ffmpeg trim failed: {msg}"));
+    }
+    Ok(dest_s)
 }

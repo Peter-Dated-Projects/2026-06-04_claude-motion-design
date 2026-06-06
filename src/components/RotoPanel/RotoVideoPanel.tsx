@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-import { useRotoStore } from "../../store/rotoStore";
+import { useRotoStore, MAX_CLIP_SECONDS } from "../../store/rotoStore";
 import { useProjectStore } from "../../store/projectStore";
 import type { RotoscopeResult } from "../../types/roto";
 import type { LoadedSequence } from "../../store/rotoStore";
@@ -96,16 +96,171 @@ function SequencePlayer({
   );
 }
 
+/** Format seconds as `MM:SS.s` (e.g. 64.2 -> "01:04.2"). */
+function formatTimecode(seconds: number): string {
+  const safe = Math.max(0, seconds);
+  const mins = Math.floor(safe / 60);
+  const secs = safe - mins * 60;
+  return `${String(mins).padStart(2, "0")}:${secs.toFixed(1).padStart(4, "0")}`;
+}
+
+/**
+ * Parse a clip-time string. Accepts `MM:SS.f` (e.g. "01:04.5"), or a bare number
+ * of seconds (e.g. "64.5"). Returns null for empty / unparseable input so the
+ * caller can clear the bound.
+ */
+function parseTimecode(raw: string): number | null {
+  const s = raw.trim();
+  if (!s) return null;
+  if (s.includes(":")) {
+    const parts = s.split(":");
+    if (parts.length !== 2) return null;
+    const m = Number(parts[0]);
+    const sec = Number(parts[1]);
+    if (!Number.isFinite(m) || !Number.isFinite(sec) || sec < 0) return null;
+    return m * 60 + sec;
+  }
+  const n = Number(s);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/**
+ * Clip-range selector under the scrubber: a track showing the selected
+ * [clipStart, clipEnd] region (and the playhead), two editable time inputs, and
+ * Set Start / Set End buttons that stamp the current scrub position. Bounds are
+ * source-relative seconds; the parent enforces the 60s cap and disables Generate.
+ */
+function ClipRangeControl({
+  duration,
+  currentTime,
+  clipStart,
+  clipEnd,
+  onSetStart,
+  onSetEnd,
+  onSeek,
+}: {
+  duration: number | null;
+  currentTime: number;
+  clipStart: number | null;
+  clipEnd: number | null;
+  onSetStart: (s: number | null) => void;
+  onSetEnd: (s: number | null) => void;
+  onSeek: (t: number) => void;
+}) {
+  // Local edit buffers so typing doesn't fight the store; commit on blur/Enter.
+  const [startText, setStartText] = useState("");
+  const [endText, setEndText] = useState("");
+
+  // Reflect external bound changes (Set buttons, reset) into the inputs.
+  useEffect(() => {
+    setStartText(clipStart != null ? formatTimecode(clipStart) : "");
+  }, [clipStart]);
+  useEffect(() => {
+    setEndText(clipEnd != null ? formatTimecode(clipEnd) : "");
+  }, [clipEnd]);
+
+  const pct = (t: number) =>
+    duration && duration > 0 ? Math.min(100, Math.max(0, (t / duration) * 100)) : 0;
+
+  const regionLeft = clipStart != null ? pct(clipStart) : 0;
+  const regionRight = clipEnd != null ? pct(clipEnd) : 100;
+  const hasRegion = clipStart != null && clipEnd != null && clipEnd > clipStart;
+
+  const seekFromPointer = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!duration || duration <= 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    onSeek(frac * duration);
+  };
+
+  return (
+    <div className="roto-clip">
+      <div className="roto-clip__head">
+        <span className="roto-clip__label">Clip range</span>
+        <button
+          type="button"
+          className="roto-clip__clear"
+          disabled={clipStart == null && clipEnd == null}
+          onClick={() => {
+            onSetStart(null);
+            onSetEnd(null);
+          }}
+        >
+          Clear
+        </button>
+      </div>
+
+      <div
+        className="roto-clip__track"
+        onPointerDown={seekFromPointer}
+        title={duration ? "Click to seek" : undefined}
+      >
+        {hasRegion ? (
+          <div
+            className="roto-clip__region"
+            style={{ left: `${regionLeft}%`, width: `${regionRight - regionLeft}%` }}
+          />
+        ) : null}
+        <div className="roto-clip__playhead" style={{ left: `${pct(currentTime)}%` }} />
+      </div>
+
+      <div className="roto-clip__inputs">
+        <button
+          type="button"
+          className="roto-clip__set"
+          onClick={() => onSetStart(currentTime)}
+        >
+          Set Start
+        </button>
+        <input
+          className="roto-clip__time"
+          value={startText}
+          placeholder="--:--"
+          aria-label="Clip start time"
+          onChange={(e) => setStartText(e.target.value)}
+          onBlur={() => onSetStart(parseTimecode(startText))}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          }}
+        />
+        <span className="roto-clip__dash">-</span>
+        <input
+          className="roto-clip__time"
+          value={endText}
+          placeholder="--:--"
+          aria-label="Clip end time"
+          onChange={(e) => setEndText(e.target.value)}
+          onBlur={() => onSetEnd(parseTimecode(endText))}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          }}
+        />
+        <button
+          type="button"
+          className="roto-clip__set"
+          onClick={() => onSetEnd(currentTime)}
+        >
+          Set End
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function RotoVideoPanel() {
   const video = useRotoStore((s) => s.video);
   const loadedSequence = useRotoStore((s) => s.loadedSequence);
   const clearSequence = useRotoStore((s) => s.clearSequence);
   const startFrame = useRotoStore((s) => s.startFrame);
+  const clipStart = useRotoStore((s) => s.clipStart);
+  const clipEnd = useRotoStore((s) => s.clipEnd);
   const points = useRotoStore((s) => s.points);
   const frameSkip = useRotoStore((s) => s.frameSkip);
   const phase = useRotoStore((s) => s.phase);
   const error = useRotoStore((s) => s.error);
   const setStartFrame = useRotoStore((s) => s.setStartFrame);
+  const setClipStart = useRotoStore((s) => s.setClipStart);
+  const setClipEnd = useRotoStore((s) => s.setClipEnd);
   const startJob = useRotoStore((s) => s.startJob);
   const jobComplete = useRotoStore((s) => s.jobComplete);
   const setError = useRotoStore((s) => s.setError);
@@ -119,7 +274,22 @@ export default function RotoVideoPanel() {
   const fps = video?.fps ?? ASSUMED_FPS;
   const isJobRunning = phase === "uploading" || phase === "processing";
   const fgCount = points.filter((p) => p.label === 1).length;
-  const canGenerate = startFrame != null && fgCount > 0 && !isJobRunning && !!slug;
+
+  // Clip range is "set" only when both bounds form a positive span; otherwise the
+  // whole source is uploaded.
+  const hasClip = clipStart != null && clipEnd != null && clipEnd > clipStart;
+  const duration = video?.durationSeconds ?? null;
+  // The portion that will actually be uploaded: the clip span when set, else the
+  // full (probed) duration. null when neither is known.
+  const effectiveDuration = hasClip
+    ? (clipEnd as number) - (clipStart as number)
+    : duration;
+  // Mirror the service's 60s reject so we don't fire off a doomed upload.
+  const exceedsCap =
+    effectiveDuration != null && effectiveDuration > MAX_CLIP_SECONDS;
+
+  const canGenerate =
+    startFrame != null && fgCount > 0 && !isJobRunning && !!slug && !exceedsCap;
 
   const videoUrl = video ? convertFileSrc(video.path) : null;
 
@@ -142,12 +312,31 @@ export default function RotoVideoPanel() {
     const jobId = `roto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     startJob(jobId);
     try {
+      // When a clip range is set, trim the source to [clipStart, clipEnd] first
+      // and upload that. The downstream rotoscope_video re-clips frame-accurately
+      // from `startFrame` with gte(n, start_frame) on whatever file it receives,
+      // so the reference frame index must be rebased onto the trimmed clip (the
+      // trim drops the first clipStart seconds). Points are spatial coords on the
+      // reference frame and are unaffected.
+      let sourcePath = video.path;
+      let effectiveStartFrame = startFrame;
+      if (hasClip) {
+        sourcePath = await invoke<string>("trim_video", {
+          path: video.path,
+          startSecs: clipStart,
+          endSecs: clipEnd,
+        });
+        effectiveStartFrame = Math.max(
+          0,
+          startFrame - Math.round((clipStart as number) * fps),
+        );
+      }
       const result = await invoke<RotoscopeResult>("rotoscope_video", {
         slug,
         host,
-        sourcePath: video.path,
+        sourcePath,
         jobId,
-        startFrame,
+        startFrame: effectiveStartFrame,
         points,
         frameSkip,
         compress,
@@ -238,6 +427,21 @@ export default function RotoVideoPanel() {
                   Set Start Frame
                 </button>
               </div>
+
+              <ClipRangeControl
+                duration={duration}
+                currentTime={currentTime}
+                clipStart={clipStart}
+                clipEnd={clipEnd}
+                onSetStart={setClipStart}
+                onSetEnd={setClipEnd}
+                onSeek={(t) => {
+                  if (playerRef.current) {
+                    playerRef.current.currentTime = t;
+                    setCurrentTime(t);
+                  }
+                }}
+              />
             </div>
           ) : (
             // Locked: point placement on the reference frame + change-frame escape.
@@ -260,6 +464,14 @@ export default function RotoVideoPanel() {
               ) : null}
             </>
           )}
+
+          {exceedsCap ? (
+            <div className="roto-video__cap-warn">
+              {hasClip
+                ? `Clip is ${effectiveDuration!.toFixed(1)}s -- the service caps uploads at ${MAX_CLIP_SECONDS}s. Trim the range below ${MAX_CLIP_SECONDS}s to generate.`
+                : `This video is ${effectiveDuration!.toFixed(0)}s -- the service caps uploads at ${MAX_CLIP_SECONDS}s. Set a clip range under ${MAX_CLIP_SECONDS}s to generate.`}
+            </div>
+          ) : null}
 
           <RotoControls
             canGenerate={canGenerate}
@@ -370,6 +582,100 @@ const STYLES = `
   background: var(--accent, #6ea8fe);
   border: none;
   border-radius: 5px;
+  cursor: pointer;
+}
+.roto-video__cap-warn {
+  margin: 8px 12px 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #f4d58d;
+  background: #2a2412;
+  border: 1px solid #5c4f2a;
+  border-radius: 5px;
+}
+.roto-clip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+}
+.roto-clip__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.roto-clip__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.roto-clip__clear {
+  padding: 2px 8px;
+  font-size: 10px;
+  font-family: inherit;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.roto-clip__clear:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.roto-clip__track {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  cursor: pointer;
+  overflow: hidden;
+}
+.roto-clip__region {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--accent, #6ea8fe);
+  opacity: 0.45;
+}
+.roto-clip__playhead {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+}
+.roto-clip__inputs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.roto-clip__time {
+  width: 64px;
+  padding: 3px 6px;
+  font-size: 11px;
+  font-family: inherit;
+  text-align: center;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+}
+.roto-clip__dash {
+  color: var(--text-faint);
+}
+.roto-clip__set {
+  padding: 3px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
   cursor: pointer;
 }
 .roto-video__locked-bar {

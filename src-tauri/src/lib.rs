@@ -79,6 +79,7 @@ pub fn run() {
             commands::rotoscoping::rotoscope_video,
             commands::rotoscoping::cancel_rotoscope,
             commands::roto_media::list_rotoscope_outputs,
+            commands::roto_media::trim_video,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

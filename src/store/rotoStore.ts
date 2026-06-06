@@ -94,6 +94,13 @@ export const DEFAULT_RESOLUTION: RotoResolution = {
 /** Proposal default: "fast" (~CRF 23) re-encode. */
 export const DEFAULT_QUALITY: QualityPreset = "fast";
 
+/**
+ * Hard cap (seconds) the rotoscoping microservice enforces on an uploaded clip
+ * (`MAX_VIDEO_SECONDS = 60` in the service; it returns 400 past it). The client
+ * mirrors it so a too-long range is caught before the upload the server rejects.
+ */
+export const MAX_CLIP_SECONDS = 60;
+
 export interface RotoState {
   // --- Service discovery -----------------------------------------------------
   /** Whether the microservice answered /health at startup. Gates the workspace. */
@@ -113,6 +120,15 @@ export interface RotoState {
   loadedSequence: LoadedSequence | null;
   /** The locked reference frame index, or null until "Set Start Frame". */
   startFrame: number | null;
+  /**
+   * Clip-range bounds in seconds on the SOURCE timeline, or null when unset.
+   * When both are set the submit flow trims the source to [clipStart, clipEnd]
+   * before upload (T-015). null/null means upload the whole source. These are
+   * SOURCE-relative; the reference `startFrame` is rebased onto the trimmed clip
+   * at submit time, not stored rebased.
+   */
+  clipStart: number | null;
+  clipEnd: number | null;
   /** Placed prompt points, in placement order (fg + bg interleaved). */
   points: RotoPoint[];
   /** Frames to skip between processed frames (0..MAX_FRAME_SKIP). */
@@ -150,6 +166,10 @@ export interface RotoState {
   clearSequence: () => void;
   /** Lock the current scrub position as the reference frame. */
   setStartFrame: (frame: number | null) => void;
+  /** Set the clip-range start in seconds (clamped to >= 0), or null to clear. */
+  setClipStart: (seconds: number | null) => void;
+  /** Set the clip-range end in seconds (clamped to >= 0), or null to clear. */
+  setClipEnd: (seconds: number | null) => void;
   /** Append a prompt point (foreground or background per its label). */
   addPoint: (point: RotoPoint) => void;
   /** Clear all placed points. */
@@ -192,6 +212,8 @@ const FRESH_SETUP = {
   video: null,
   loadedSequence: null,
   startFrame: null,
+  clipStart: null,
+  clipEnd: null,
   points: [] as RotoPoint[],
   frameSkip: DEFAULT_FRAME_SKIP,
   resolution: DEFAULT_RESOLUTION,
@@ -216,6 +238,8 @@ export const useRotoStore = create<RotoState>((set) => ({
       video,
       loadedSequence: null,
       startFrame: null,
+      clipStart: null,
+      clipEnd: null,
       points: [],
       resolution: DEFAULT_RESOLUTION,
       quality: DEFAULT_QUALITY,
@@ -229,6 +253,12 @@ export const useRotoStore = create<RotoState>((set) => ({
   clearSequence: () => set({ loadedSequence: null }),
 
   setStartFrame: (startFrame) => set({ startFrame }),
+
+  setClipStart: (seconds) =>
+    set({ clipStart: seconds == null ? null : Math.max(0, seconds) }),
+
+  setClipEnd: (seconds) =>
+    set({ clipEnd: seconds == null ? null : Math.max(0, seconds) }),
 
   addPoint: (point) => set((state) => ({ points: [...state.points, point] })),
 
