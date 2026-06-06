@@ -11,5 +11,8 @@ dist/
 # Rust / Tauri build artifacts
 src-tauri/target/
 
+# ig-pipeline local run output (extractions written by run.ts during testing)
+scripts/ig-pipeline/.out/
+
 # Built MP4-render toolchain archives (uploaded as release assets, not tracked)
 dist-toolchain/

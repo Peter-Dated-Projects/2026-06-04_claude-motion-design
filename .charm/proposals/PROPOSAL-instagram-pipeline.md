@@ -72,15 +72,19 @@ pipeline before any frame work. yt-dlp handles the actual fetch:
 yt-dlp --format "mp4" --output "/tmp/ref_%(id)s.mp4" <URL>
 ```
 
-**Instagram-specific:** Requires cookies. The app should:
-1. Attempt download without cookies first
-2. If it gets a login-required error, prompt the user to export cookies from their
-   browser (one-time setup) and store the path in Settings
+**Instagram-specific:** Cookies are a *fallback*, not a default. A spike against a
+public reel (see `SPIKE-instagram-pipeline.md`, 2026-06-06) downloaded it with
+zero auth on the first attempt — current yt-dlp (2026.03.17) sets up a guest
+session and pulls public reel metadata without login. So the app should:
+1. Attempt download without cookies first — this succeeds for public reels
+2. Only if it gets a login-required / age-gated / rate-limited error, prompt the
+   user to export cookies from their browser (one-time setup) and store the path
+   in Settings
 3. Re-attempt with `--cookies <path>`
 
-This makes Instagram work without being fully automated — user does the one-time
-cookie export, the app handles the rest. yt-dlp supports Firefox and Chrome cookie
-extraction via `--cookies-from-browser firefox`.
+Do NOT build cookie export as a required first-run step — the common case
+(public reel URL) works zero-config. yt-dlp supports Firefox and Chrome cookie
+extraction via `--cookies-from-browser firefox` for the fallback path.
 
 Non-Instagram URLs (YouTube, TikTok, Vimeo) work without auth.
 
@@ -218,19 +222,32 @@ All invocations use `--model claude-sonnet-4-6`. This applies to both the
 non-interactive analysis subprocess and the interactive PTY coding session.
 
 The analysis step uses Claude CLI's **non-interactive print mode**, run as a
-one-shot subprocess (separate from the interactive PTY session):
+one-shot subprocess (separate from the interactive PTY session).
+
+IMPORTANT: there is **no `--image` flag** on the Claude CLI (verified against
+2.1.167 in the spike). Images are attached by referencing their absolute paths in
+the prompt and enabling the agent's Read tool, which is multimodal. The agent
+reads each frame and returns the brief as the `.result` field of the JSON
+envelope:
 
 ```bash
-claude -p "<prompt>" \
+echo "<prompt with absolute frame paths listed in order>" | \
+  claude -p \
   --model claude-sonnet-4-6 \
-  --image /tmp/frames/frame_0001.jpg \
-  --image /tmp/frames/frame_0002.jpg \
-  ... \
+  --allowedTools "Read" \
   --output-format json
 ```
 
 The Tauri backend spawns this as a `std::process::Command`, captures stdout,
-and parses the JSON. Frames never enter the interactive PTY context window.
+and parses the JSON envelope's `.result`. Frames never enter the interactive PTY
+context window — this remains an isolated subprocess.
+
+Cost/latency budget (from the spike, sonnet, 11 frames): ~41s, ~$0.21, ~12 turns
+(one Read per frame). Latency scales with frame count, so the UI's analysis
+progress stage should expect ~40-60s. A `--input-format stream-json` variant that
+sends all frames as inline image blocks in a single turn is a candidate
+optimization (collapses the per-frame Read round-trips) — evaluate as a follow-up,
+not required for v1.
 
 ### Prompt
 
@@ -406,8 +423,11 @@ rotoscoped sequences. Video files are excluded from Claude's asset context.
 - Download: Rust `std::process::Command` calling yt-dlp (add to toolchain download)
 - Frame extraction + scoring: Node script alongside render-mp4.mjs; uses the
   bundled ffmpeg binary from `dist-toolchain/` — do not assume ffmpeg on PATH
-- Scoring: Laplacian variance via sharp/jimp in Node, or spawn a small Python
-  script with OpenCV
+- Scoring: Laplacian variance via sharp/jimp in Node, or a small Python script
+  using numpy + Pillow. Do NOT use OpenCV — it has no wheels for current Python
+  (3.14) and the spike showed numpy+Pillow computes sharpness/delta/entropy fine.
+  The illustrative `cv2` snippets in the Frame Selection section above are
+  pseudocode; the real impl uses numpy+Pillow or Node
 - Brief extraction: `claude -p` subprocess from Rust backend, stdout captured
 - Brief delivery: existing `terminal_input` Tauri command, no PTY changes
 - Progress streaming: Tauri `emit` events to frontend, same pattern as render toolchain

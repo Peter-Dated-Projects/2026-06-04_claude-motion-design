@@ -661,7 +661,7 @@ body,
 .workspace-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   height: 38px;
   padding: 0 8px;
   gap: 8px;

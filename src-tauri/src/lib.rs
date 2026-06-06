@@ -11,6 +11,7 @@ mod pty_bridge;
 mod commands {
     pub mod claude;
     pub mod export;
+    pub mod ig_pipeline;
     pub mod projects;
     pub mod render_toolchain;
     pub mod zip;
@@ -69,6 +70,9 @@ pub fn run() {
             commands::export::choose_render_output,
             commands::render_toolchain::render_toolchain_status,
             commands::render_toolchain::install_render_toolchain,
+            commands::ig_pipeline::ig_extract_phase_a,
+            commands::ig_pipeline::ig_extract_phase_b,
+            commands::ig_pipeline::ig_list_extractions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

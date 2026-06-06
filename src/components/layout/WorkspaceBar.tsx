@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { EditIcon, LayersIcon, RocketIcon } from "../icons";
+import { EditIcon, InstagramIcon, LayersIcon, RocketIcon } from "../icons";
 import {
   useWorkspaceStore,
   WORKSPACE_DEFS,
@@ -12,6 +12,7 @@ const ICONS: Record<WorkspaceIconKey, ComponentType<{ size?: number; className?:
   edit: EditIcon,
   layers: LayersIcon,
   rocket: RocketIcon,
+  instagram: InstagramIcon,
 };
 
 // Bottom bar of workspace tabs -- the stages of the design workflow. The list

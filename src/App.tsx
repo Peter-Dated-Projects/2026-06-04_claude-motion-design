@@ -14,6 +14,11 @@ import WorkspaceBar from "./components/layout/WorkspaceBar";
 import TerminalPanel from "./components/TerminalPanel/TerminalPanel";
 import CodePanel, { ENTRY_FILE } from "./components/CodePanel/CodePanel";
 import PreviewPanel from "./components/PreviewPanel/PreviewPanel";
+import VideoPreviewPanel from "./components/IGWorkspace/VideoPreviewPanel";
+import FrameGridPanel from "./components/IGWorkspace/FrameGridPanel";
+import ExtractionListPanel from "./components/IGWorkspace/ExtractionListPanel";
+import BriefPanel from "./components/IGWorkspace/BriefPanel";
+import IGPipelineHost from "./components/IGWorkspace/useIGPipeline";
 import Onboarding, { type OnboardingPhase } from "./components/Onboarding";
 import Settings from "./components/Settings";
 import RenderModal from "./components/RenderModal";
@@ -63,11 +68,25 @@ const PANEL_TITLES: Record<PanelId, string> = {
   terminal: "Claude",
   editor: "Editor",
   preview: "Preview",
+  "ig-extraction-list": "Extractions",
+  "ig-preview": "Reel",
+  "ig-frame-grid": "Frames",
+  "ig-brief": "Brief",
 };
 
 // Canonical left-to-right order, used to dock a re-added panel on a sensible
-// side (a panel that sorts before everything currently shown docks left).
-const PANEL_ORDER: PanelId[] = ["terminal", "editor", "preview"];
+// side (a panel that sorts before everything currently shown docks left). The
+// IG slots sort AFTER the three singletons so editing-workspace docking is
+// unaffected (availablePanels keeps each stage's menu to its own ids anyway).
+const PANEL_ORDER: PanelId[] = [
+  "terminal",
+  "editor",
+  "preview",
+  "ig-extraction-list",
+  "ig-preview",
+  "ig-frame-grid",
+  "ig-brief",
+];
 
 // The active workspace's panel arrangement is owned by the workspace store
 // (each workspace = a stage of the design flow with its own layout over the
@@ -766,6 +785,16 @@ function App() {
               onStartPass={startPass}
             />
           );
+        // IG stage slots -- the real panels. The Tauri <-> store bridge that
+        // drives them (events + invoke) is IGPipelineHost, mounted app-level.
+        case "ig-extraction-list":
+          return <ExtractionListPanel />;
+        case "ig-preview":
+          return <VideoPreviewPanel />;
+        case "ig-frame-grid":
+          return <FrameGridPanel />;
+        case "ig-brief":
+          return <BriefPanel />;
       }
     },
     [
@@ -781,6 +810,10 @@ function App() {
 
   return (
     <div className="app">
+      {/* Headless Tauri<->store bridge for the IG workspace (events + invoke).
+          Renders nothing; mounted app-level so a run keeps streaming after the
+          'Use as Style Reference' handoff switches workspaces. */}
+      <IGPipelineHost />
       <Toolbar
         onOpenSettings={() => setSettingsOpen(true)}
         onNewProject={() => setNewProjectOpen(true)}

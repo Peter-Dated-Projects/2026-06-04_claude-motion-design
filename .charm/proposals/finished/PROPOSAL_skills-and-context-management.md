@@ -1,5 +1,7 @@
 # Proposal: Skills & Context Management System for ClaudeMotion
 
+**Status: DONE** — implemented and shipped (see commit `14c9038` "ft. skills + gifs export").
+
 ---
 
 ## Context
