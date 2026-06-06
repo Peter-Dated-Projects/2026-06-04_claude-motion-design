@@ -232,11 +232,86 @@ function frameIndexFromName(name: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// smoke entry: write a fixture extraction into a temp dir to exercise the stage
-// standalone (`bun run scripts/ig-pipeline/store.ts`).
+// CLI entry. Two modes, selected by argv:
+//
+//   1. Real store mode (consumed by the Rust IG backend, which spawns this stage):
+//        bun run store.ts --results <file|-> --out <projectRoot> --id <sourceId> [--date <YYYY-MM-DD>]
+//      - --results : path to a JSON file holding the four-key `ExtractionResults`
+//                    object ({ download, clip, scoreResult, analyze }), or `-`
+//                    to read that JSON from stdin (read to EOF).
+//      - --out     : project/output root that contains (or will contain) `extractions/`.
+//      - --id      : source id used to name the extraction folder.
+//      - --date    : optional YYYY-MM-DD pin for the folder's date segment
+//                    (defaults to today); lets the caller/tests avoid wall-clock
+//                    nondeterminism. Parsed as a LOCAL date to match `dateStamp`.
+//      stdout is exactly ONE line of JSON: { "dir", "briefJson", "extractionMd" }
+//      (all absolute). Any human-readable confirmation goes to stderr. A
+//      malformed/empty --results blob exits non-zero with a stderr message and
+//      prints nothing to stdout.
+//
+//   2. Smoke mode (no args, or `--smoke`): write a fixture extraction into a temp
+//      dir to exercise the stage standalone. Never runs when real args are
+//      present, and its console output is stderr-free human text on stdout that
+//      only appears in this mode.
 // ---------------------------------------------------------------------------
 
-if (import.meta.main) {
+/** Read the `--results` source (a file path, or `-` for stdin) to EOF. */
+async function readResultsSource(source: string): Promise<string> {
+  return source === "-" ? await Bun.stdin.text() : await Bun.file(source).text();
+}
+
+/** Parse a required `--key value` flag from argv; returns undefined when absent. */
+function getFlag(argv: string[], name: string): string | undefined {
+  const i = argv.indexOf(name);
+  if (i === -1) return undefined;
+  return argv[i + 1];
+}
+
+/** Parse a `YYYY-MM-DD` string into a LOCAL Date (matches `dateStamp`'s local getters). */
+function parseDateFlag(value: string): Date {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) throw new Error(`--date must be YYYY-MM-DD, got ${JSON.stringify(value)}.`);
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
+/** Real store mode: build paths from argv, write the extraction, print the paths as JSON. */
+async function runStoreCli(argv: string[]): Promise<void> {
+  const { resolveExtractionPaths } = await import("./lib/paths.ts");
+
+  const resultsArg = getFlag(argv, "--results");
+  const out = getFlag(argv, "--out");
+  const id = getFlag(argv, "--id");
+  const dateArg = getFlag(argv, "--date");
+
+  if (!resultsArg || !out || !id) {
+    console.error(
+      "usage: bun run store.ts --results <file|-> --out <projectRoot> --id <sourceId> [--date <YYYY-MM-DD>]",
+    );
+    process.exit(1);
+  }
+
+  let results: ExtractionResults;
+  try {
+    const raw = await readResultsSource(resultsArg);
+    if (raw.trim().length === 0) throw new Error("--results payload was empty.");
+    results = JSON.parse(raw) as ExtractionResults;
+  } catch (err) {
+    console.error(`store: could not read/parse --results: ${(err as Error).message}`);
+    process.exit(1);
+  }
+
+  const date = dateArg ? parseDateFlag(dateArg) : undefined;
+  const paths = resolveExtractionPaths(out, id, date ? { date } : {});
+  await writeExtraction(paths, results);
+
+  console.error(`store: wrote extraction to ${paths.dir}`);
+  console.log(
+    JSON.stringify({ dir: paths.dir, briefJson: paths.briefJson, extractionMd: paths.extractionMd }),
+  );
+}
+
+/** Smoke mode: write (twice, to prove idempotency) a fixture extraction into a temp dir. */
+async function runSmoke(): Promise<void> {
   const { mkdtemp, writeFile: write } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
@@ -322,4 +397,13 @@ if (import.meta.main) {
   console.log(`Wrote extraction to ${paths.dir}`);
   console.log(`  brief.json:    ${paths.briefJson}`);
   console.log(`  extraction.md: ${paths.extractionMd}`);
+}
+
+if (import.meta.main) {
+  const argv = Bun.argv.slice(2);
+  if (argv.length === 0 || argv.includes("--smoke")) {
+    await runSmoke();
+  } else {
+    await runStoreCli(argv);
+  }
 }

@@ -336,10 +336,25 @@ function formatTable(result: ScoreResult): string {
   return [fmt(header), ...rows.map(fmt)].join("\n");
 }
 
+// CLI argv contract (consumed by the Rust IG backend, which spawns this stage):
+//   bun run score.ts <frames-dir | frame paths...> [--json]
+// `--json` is position-independent and is stripped from the args before
+// `resolveFrameArgs`, so it is never resolve()'d into a bogus frame path. With
+// `--json`, stdout is exactly ONE line of `JSON.stringify(result)` -- the full
+// `ScoreResult` (both `scored` and `kept`). `JSON.stringify` preserves
+// `delta: null` and OMITS `rejectReason` when undefined, so a below-top-N
+// survivor serializes as `kept:false` with no `rejectReason` key (it is the
+// absence of a reason, NOT the display-only "below-top-N" string -- see the KB
+// gotcha `score-reject-reason-vs-below-top-n`). Without `--json`, the
+// human-readable table + summary stay the default. The non-fatal "too few
+// survivors" warning is on stderr (via `onWarn`), so stdout stays clean in
+// either mode.
 if (import.meta.main) {
-  const args = Bun.argv.slice(2);
+  const rawArgs = Bun.argv.slice(2);
+  const asJson = rawArgs.includes("--json");
+  const args = rawArgs.filter((a) => a !== "--json");
   if (args.length === 0) {
-    console.error("usage: bun run score.ts <frames-dir | frame paths...>");
+    console.error("usage: bun run score.ts <frames-dir | frame paths...> [--json]");
     process.exit(1);
   }
   const framePaths = await resolveFrameArgs(args);
@@ -348,8 +363,12 @@ if (import.meta.main) {
     process.exit(1);
   }
   const result = await scoreFrames(framePaths);
-  console.log(formatTable(result));
-  console.log(
-    `\n${result.kept.length} kept / ${result.scored.length} scored (ranked best-first).`,
-  );
+  if (asJson) {
+    console.log(JSON.stringify(result));
+  } else {
+    console.log(formatTable(result));
+    console.log(
+      `\n${result.kept.length} kept / ${result.scored.length} scored (ranked best-first).`,
+    );
+  }
 }
