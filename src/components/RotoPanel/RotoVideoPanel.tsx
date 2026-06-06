@@ -6,7 +6,7 @@ import type { RotoscopeResult } from "../../types/roto";
 import type { LoadedSequence } from "../../store/rotoStore";
 import PointOverlay from "./PointOverlay";
 import RotoControls from "./RotoControls";
-import CompressionModal from "./CompressionModal";
+import ReviewModal from "./ReviewModal";
 import ProcessingView from "./ProcessingView";
 
 /**
@@ -18,7 +18,7 @@ import ProcessingView from "./ProcessingView";
  *   - a scrubbing <video> player + "Set Start Frame" to lock the reference frame
  *   - PointOverlay for placing fg/bg SAM2 prompt points on the locked frame
  *   - RotoControls for the frame-skip selector + live output-frame estimate
- *   - CompressionModal on Generate, then the rotoscope_video job
+ *   - ReviewModal on Generate (read-only summary), then the rotoscope_video job
  *   - ProcessingView while the job runs, with Cancel
  *
  * Boundary note: the rotoStore is intentionally Tauri-free, and App.tsx wires the
@@ -269,7 +269,7 @@ export default function RotoVideoPanel() {
       )}
 
       {showModal ? (
-        <CompressionModal
+        <ReviewModal
           onConfirm={(compress, quality) => void runJob(compress, quality)}
           onCancel={() => setShowModal(false)}
         />
