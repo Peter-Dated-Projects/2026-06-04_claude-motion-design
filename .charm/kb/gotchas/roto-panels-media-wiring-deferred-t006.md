@@ -2,11 +2,17 @@
 id: roto-panels-media-wiring-deferred-t006
 root: gotchas
 type: gotcha
-status: current
-summary: "The roto Assets/Outputs panels (T-005) ship images-only + a store-driven outputs LIST; video listing, output thumbnails, and double-click PNG-sequence playback are deferred to T-006 because the backend/store surface for them does not exist yet."
+status: superseded
+summary: "(RESOLVED in T-006) The roto Assets/Outputs panels (T-005) shipped images-only + a store-driven outputs LIST; video listing, output thumbnails, and double-click PNG-sequence playback were deferred to T-006, which has now landed all three."
 created: 2026-06-06
 updated: 2026-06-06
+related:
+  - roto-media-wiring-landed-t006
 ---
+
+> **RESOLVED by T-006** -- all three gaps below are now wired. See
+> [[roto-media-wiring-landed-t006]] for what shipped. Kept for history.
+
 
 RotoAssetsPanel and RotoOutputsPanel (T-005) deliberately ship a SUBSET. Three
 behaviors the proposal/UX spec call for were cut because nothing backs them, and

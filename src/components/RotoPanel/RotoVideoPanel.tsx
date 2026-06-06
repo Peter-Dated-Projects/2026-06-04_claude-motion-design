@@ -1,8 +1,9 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { useRotoStore } from "../../store/rotoStore";
 import { useProjectStore } from "../../store/projectStore";
 import type { RotoscopeResult } from "../../types/roto";
+import type { LoadedSequence } from "../../store/rotoStore";
 import PointOverlay from "./PointOverlay";
 import RotoControls from "./RotoControls";
 import CompressionModal from "./CompressionModal";
@@ -33,8 +34,72 @@ const ROTO_HOST_KEY = "claude-motion:rotoHost";
 /** Source fps assumed for frame<->time conversion when the video is unprobed. */
 const ASSUMED_FPS = 30;
 
+/**
+ * Looping stop-motion playback of a loaded output's PNG sequence. Advances a
+ * frame index on a timer at the sequence's effective fps and loops. Renders the
+ * current frame as an <img> over a checkerboard so the transparent rotoscope
+ * cut-out reads against the background; all urls are mounted hidden once so the
+ * browser caches them and the loop does not flicker on first pass.
+ */
+function SequencePlayer({
+  sequence,
+  onClose,
+}: {
+  sequence: LoadedSequence;
+  onClose: () => void;
+}) {
+  const [frame, setFrame] = useState(0);
+  const { urls, fps, name } = sequence;
+  const count = urls.length;
+
+  useEffect(() => {
+    setFrame(0);
+    if (count <= 1) return;
+    const periodMs = 1000 / Math.max(1, fps);
+    const id = window.setInterval(() => {
+      setFrame((f) => (f + 1) % count);
+    }, periodMs);
+    return () => window.clearInterval(id);
+  }, [count, fps]);
+
+  const current = urls[Math.min(frame, count - 1)];
+
+  return (
+    <div className="roto-video__seq">
+      <div className="roto-video__seq-bar">
+        <span className="roto-video__seq-name">{name}</span>
+        <span className="roto-video__seq-info">
+          {count} {count === 1 ? "frame" : "frames"} @ {fps.toFixed(1)} fps
+        </span>
+        <button
+          type="button"
+          className="roto-video__seq-close"
+          onClick={onClose}
+        >
+          Close
+        </button>
+      </div>
+      <div className="roto-video__seq-stage">
+        {current ? (
+          <img className="roto-video__seq-img" src={current} alt={name} draggable={false} />
+        ) : (
+          <div className="roto-video__empty">This output has no frames.</div>
+        )}
+        {/* Preload the rest so the loop is flicker-free after the first pass. */}
+        <div className="roto-video__seq-preload" aria-hidden>
+          {urls.map((u) => (
+            <img key={u} src={u} alt="" />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function RotoVideoPanel() {
   const video = useRotoStore((s) => s.video);
+  const loadedSequence = useRotoStore((s) => s.loadedSequence);
+  const clearSequence = useRotoStore((s) => s.clearSequence);
   const startFrame = useRotoStore((s) => s.startFrame);
   const points = useRotoStore((s) => s.points);
   const frameSkip = useRotoStore((s) => s.frameSkip);
@@ -118,9 +183,15 @@ export default function RotoVideoPanel() {
       <style>{STYLES}</style>
       <div className="roto-video__label">Video</div>
 
-      {!video ? (
+      {loadedSequence ? (
+        // A completed output's PNG sequence is loaded: play it as looping
+        // stop-motion. Takes priority over the source-video setup flow; Close
+        // returns to whatever source-video state is underneath.
+        <SequencePlayer sequence={loadedSequence} onClose={clearSequence} />
+      ) : !video ? (
         <div className="roto-video__empty">
-          Double-click a video from the panel on the right.
+          Load a video from the panel on the right, or double-click an output to
+          play it.
         </div>
       ) : isJobRunning ? (
         <ProcessingView onCancel={cancelJob} />
@@ -316,5 +387,74 @@ const STYLES = `
   border: 1px solid var(--border-soft);
   border-radius: 4px;
   cursor: pointer;
+}
+.roto-video__seq {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.roto-video__seq-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.roto-video__seq-name {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.roto-video__seq-info {
+  flex: 1 1 auto;
+  color: var(--text-faint);
+}
+.roto-video__seq-close {
+  flex: none;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.roto-video__seq-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 12px 12px;
+  border-radius: 6px;
+  /* Checkerboard so transparent cut-outs read against the background. */
+  background-color: #1a1d24;
+  background-image:
+    linear-gradient(45deg, #2a2e38 25%, transparent 25%),
+    linear-gradient(-45deg, #2a2e38 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #2a2e38 75%),
+    linear-gradient(-45deg, transparent 75%, #2a2e38 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+}
+.roto-video__seq-img {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+}
+.roto-video__seq-preload {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 `;

@@ -28,6 +28,25 @@ import type {
  *   foreground/background split is carried per-point in `label`.
  */
 
+/**
+ * A rotoscope output's PNG sequence loaded into the left pane for looping
+ * stop-motion playback. Not part of the backend contract -- the Outputs panel
+ * builds this from a `list_rotoscope_outputs` row (convertFileSrc the ordered
+ * PNG paths into asset:// urls, derive the effective playback fps from the
+ * stored frame_skip). Distinct from a source `video`: when present, the left
+ * pane plays this sequence instead of the source-video setup flow.
+ */
+export interface LoadedSequence {
+  /** Output folder label, e.g. `rotoscope_clip`. */
+  name: string;
+  /** Absolute path to the output folder. */
+  dir: string;
+  /** Ordered asset:// urls (convertFileSrc of the PNG sequence). */
+  urls: string[];
+  /** Effective playback fps (source fps / (frameSkip + 1)). */
+  fps: number;
+}
+
 /** Proposal default: process every 4th frame (skip=3 -> ~7.5fps at 30fps source). */
 export const DEFAULT_FRAME_SKIP = 3;
 
@@ -44,6 +63,13 @@ export interface RotoState {
   // --- Active setup ----------------------------------------------------------
   /** The video loaded into the preview pane, or null (empty state). */
   video: LoadedVideo | null;
+  /**
+   * A completed output's PNG sequence loaded for stop-motion playback, or null.
+   * Mutually exclusive with the source-video flow in the UI: when set, the left
+   * pane plays this instead of the `video` setup. Loading a source video clears
+   * it; `clearSequence` returns to whatever source-video state was underneath.
+   */
+  loadedSequence: LoadedSequence | null;
   /** The locked reference frame index, or null until "Set Start Frame". */
   startFrame: number | null;
   /** Placed prompt points, in placement order (fg + bg interleaved). */
@@ -70,8 +96,13 @@ export interface RotoState {
   setServiceAvailability: (status: RotoscopingStatus) => void;
 
   // --- Setup actions ---------------------------------------------------------
-  /** Load a source video into the preview pane; resets start frame + points. */
+  /** Load a source video into the preview pane; resets start frame + points
+   *  and clears any loaded output sequence. */
   loadVideo: (video: LoadedVideo) => void;
+  /** Load a completed output's PNG sequence for stop-motion playback. */
+  loadSequence: (sequence: LoadedSequence) => void;
+  /** Clear the loaded output sequence (returns to the source-video view). */
+  clearSequence: () => void;
   /** Lock the current scrub position as the reference frame. */
   setStartFrame: (frame: number | null) => void;
   /** Append a prompt point (foreground or background per its label). */
@@ -110,6 +141,7 @@ function outputNameFromDir(dir: string): string {
 /** Fields cleared at the start of each job / on reset (not the service flag or list). */
 const FRESH_SETUP = {
   video: null,
+  loadedSequence: null,
   startFrame: null,
   points: [] as RotoPoint[],
   frameSkip: DEFAULT_FRAME_SKIP,
@@ -129,7 +161,19 @@ export const useRotoStore = create<RotoState>((set) => ({
     set({ serviceAvailable: status.available, status }),
 
   loadVideo: (video) =>
-    set({ video, startFrame: null, points: [], progress: null, phase: "idle", error: null }),
+    set({
+      video,
+      loadedSequence: null,
+      startFrame: null,
+      points: [],
+      progress: null,
+      phase: "idle",
+      error: null,
+    }),
+
+  loadSequence: (loadedSequence) => set({ loadedSequence }),
+
+  clearSequence: () => set({ loadedSequence: null }),
 
   setStartFrame: (startFrame) => set({ startFrame }),
 

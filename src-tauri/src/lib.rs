@@ -14,6 +14,7 @@ mod commands {
     pub mod ig_pipeline;
     pub mod projects;
     pub mod render_toolchain;
+    pub mod roto_media;
     pub mod rotoscoping;
     pub mod zip;
 }
@@ -77,6 +78,7 @@ pub fn run() {
             commands::rotoscoping::check_rotoscoping_service,
             commands::rotoscoping::rotoscope_video,
             commands::rotoscoping::cancel_rotoscope,
+            commands::roto_media::list_rotoscope_outputs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

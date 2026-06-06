@@ -1,26 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useProjectStore } from "../../store/projectStore";
+import { useRotoStore } from "../../store/rotoStore";
 
 /**
  * The rotoscoping stage's top-right "Project Assets" pane.
  *
- * Scoped subset (T-005): lists the active project's IMAGE assets via the
- * existing `list_assets` command -- the same data the Code panel's AssetsView
- * shows -- as a thumbnail grid. Images are display-only here; they are not a
- * valid rotoscope source (the source must be a video), so they have no
- * double-click action, matching the proposal ("Images are listed but not
- * loadable as a roto source").
+ * Lists the active project's IMAGE assets via the existing `list_assets`
+ * command -- the same data the Code panel's AssetsView shows -- as a thumbnail
+ * grid. Images are display-only here; they are not a valid rotoscope source
+ * (the source must be a video), so they have no double-click action, matching
+ * the proposal ("Images are listed but not loadable as a roto source").
  *
- * Source VIDEOS are intentionally NOT listed: there is no backend surface that
- * enumerates project videos with absolute paths yet (`list_assets` returns
- * images only and carries no path; source videos are referenced in place and
- * never copied into the project). That wiring -- plus the double-click ->
- * `rotoStore.loadVideo` flow -- is deferred to T-006 (see TODO below), which
- * depends on this ticket and edits this file afterward.
- *
- * Pure consumer: reads the active slug from the project store and calls one
- * existing command. No new shared wiring.
+ * Source VIDEOS enter via the "Load video..." button (T-006): a native file
+ * picker (plugin-dialog `open`, video filters) whose chosen absolute path is
+ * handed to `rotoStore.loadVideo` -- the source is referenced in place, never
+ * copied into the project (per the proposal), so there is no project-video
+ * registry to enumerate here.
  */
 
 /** One image in the project's assets/, bytes inlined as a base64 data URI.
@@ -30,8 +27,12 @@ interface AssetFile {
   dataUri: string;
 }
 
+/** Common source-video extensions offered in the file picker. */
+const VIDEO_EXTENSIONS = ["mp4", "mov", "m4v", "webm", "mkv", "avi"];
+
 export default function RotoAssetsPanel() {
   const slug = useProjectStore((s) => s.activeProject?.slug ?? null);
+  const loadVideo = useRotoStore((s) => s.loadVideo);
 
   const [assets, setAssets] = useState<AssetFile[]>([]);
   const [loading, setLoading] = useState(false);
@@ -59,15 +60,32 @@ export default function RotoAssetsPanel() {
     void refresh();
   }, [refresh]);
 
-  // TODO(T-006): list source videos here (needs a backend command that
-  // enumerates project videos with absolute paths) and make a video row's
-  // double-click call rotoStore.loadVideo({ path }) to load it into the left
-  // Video Preview pane. Out of this ticket's scope (no backend surface yet).
+  // Pick a source video from disk and load it into the left preview pane. The
+  // path is referenced in place (never copied), matching the proposal.
+  const pickVideo = useCallback(async () => {
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "Video", extensions: VIDEO_EXTENSIONS }],
+    });
+    if (typeof selected === "string") {
+      loadVideo({ path: selected });
+    }
+  }, [loadVideo]);
 
   return (
     <div className="roto-assets">
       <style>{STYLES}</style>
-      <div className="roto-assets__label">Project Assets</div>
+      <div className="roto-assets__label">
+        Project Assets
+        <button
+          type="button"
+          className="roto-assets__load"
+          onClick={() => void pickVideo()}
+        >
+          Load video...
+        </button>
+      </div>
 
       {error ? <div className="roto-assets__error">{error}</div> : null}
 
@@ -121,6 +139,10 @@ const STYLES = `
   font-size: 12px;
 }
 .roto-assets__label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   position: sticky;
   top: 0;
   padding: 6px 10px;
@@ -130,6 +152,19 @@ const STYLES = `
   letter-spacing: 0.08em;
   border-bottom: 1px solid var(--border-soft);
   background: var(--surface-alt);
+}
+.roto-assets__load {
+  padding: 3px 10px;
+  font-size: 10px;
+  font-family: inherit;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #fff;
+  background: var(--accent, #6ea8fe);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
 }
 .roto-assets__error {
   padding: 8px 10px;
