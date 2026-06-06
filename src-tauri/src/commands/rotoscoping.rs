@@ -579,7 +579,8 @@ fn rotoscope_blocking(
     //    so retry briefly on 425/409 before giving up.
     let zip_bytes = fetch_result_zip(&host, &job_id)?;
 
-    // 5. Unpack the PNG sequence into <project>/assets/rotoscope_<source_stem>/.
+    // 5. Unpack the PNG sequence (plus the composed output.webm + archived
+    //    source_clip.mp4, when present) into <project>/assets/rotoscope_<stem>/.
     let stem = Path::new(&source_path)
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
@@ -588,7 +589,7 @@ fn rotoscope_blocking(
     std::fs::create_dir_all(&output_dir)
         .map_err(|e| format!("failed to create output dir: {e}"))?;
 
-    let frame_count = unzip_pngs(&zip_bytes, &output_dir)?;
+    let frame_count = unzip_output(&zip_bytes, &output_dir)?;
 
     // 6. Write meta.json (source is referenced in place, never copied).
     let meta = RotoMeta {
@@ -645,9 +646,16 @@ fn fetch_result_zip(host: &str, job_id: &str) -> Result<Vec<u8>, String> {
     Err("rotoscope result never became ready".to_string())
 }
 
-/// Extract every `.png` entry from the ZIP into `dest` (flattened to the entry's
-/// base name) and return how many were written.
-fn unzip_pngs(zip_bytes: &[u8], dest: &Path) -> Result<u32, String> {
+/// Extract the rotoscope output ZIP into `dest` (flattened to each entry's base
+/// name) and return the PNG frame count.
+///
+/// The server folds three kinds of artifact into the one `result.zip` (a single
+/// fetch, because /result reaps the work_dir right after serving it): the
+/// `frame_*.png` sequence plus, best-effort, the composed `output.webm` and the
+/// archived `source_clip.mp4`. We extract the PNGs and those two named videos;
+/// any other entry is ignored. `frame_count` counts ONLY PNGs, so the returned
+/// value (and RotoMeta.frame_count) is unchanged by the extra artifacts.
+fn unzip_output(zip_bytes: &[u8], dest: &Path) -> Result<u32, String> {
     let mut archive = zip::ZipArchive::new(Cursor::new(zip_bytes))
         .map_err(|e| format!("failed to open rotoscope ZIP: {e}"))?;
     let mut count = 0u32;
@@ -658,12 +666,15 @@ fn unzip_pngs(zip_bytes: &[u8], dest: &Path) -> Result<u32, String> {
         if entry.is_dir() {
             continue;
         }
-        // Flatten: take just the file name, and only keep PNGs.
+        // Flatten: take just the file name.
         let name = match entry.enclosed_name().and_then(|p| p.file_name().map(|f| f.to_owned())) {
             Some(n) => n.to_string_lossy().to_string(),
             None => continue,
         };
-        if !name.to_ascii_lowercase().ends_with(".png") {
+        let lower = name.to_ascii_lowercase();
+        let is_png = lower.ends_with(".png");
+        // Keep PNG frames plus the two named extras; ignore anything else.
+        if !is_png && name != "output.webm" && name != "source_clip.mp4" {
             continue;
         }
         let mut buf = Vec::with_capacity(entry.size() as usize);
@@ -671,10 +682,13 @@ fn unzip_pngs(zip_bytes: &[u8], dest: &Path) -> Result<u32, String> {
             .read_to_end(&mut buf)
             .map_err(|e| format!("failed to read ZIP entry bytes: {e}"))?;
         let mut out = std::fs::File::create(dest.join(&name))
-            .map_err(|e| format!("failed to create frame file: {e}"))?;
+            .map_err(|e| format!("failed to create output file: {e}"))?;
         out.write_all(&buf)
-            .map_err(|e| format!("failed to write frame file: {e}"))?;
-        count += 1;
+            .map_err(|e| format!("failed to write output file: {e}"))?;
+        // frame_count reflects the PNG sequence only.
+        if is_png {
+            count += 1;
+        }
     }
     Ok(count)
 }

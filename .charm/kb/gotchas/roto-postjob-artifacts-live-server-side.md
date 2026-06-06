@@ -3,10 +3,21 @@ id: roto-postjob-artifacts-live-server-side
 root: gotchas
 type: gotcha
 status: current
-summary: "T-016's composed output.webm + source_clip.mp4 are written into the microservice's server-side work_dir and reaped after /result serves the PNG zip; the client bridge (rotoscoping.rs) only extracts the PNGs into assets/rotoscope_*/, so get_rotoscope_output_files returns null for video/sourceClip until that bridge is taught to pull them across. Also: compose_video uses the concat demuxer (not -pattern_type glob) for Windows portability, and VP9 alpha shows as pix_fmt=yuv420p + TAG:alpha_mode=1 (alpha is a side layer), not yuva420p."
+summary: "RESOLVED (T-017): the cross-stage gap below is closed -- _compose_outputs now writes output.webm into output_dir (not work_dir), _finalize composes BEFORE zipping, _zip_output folds output.webm + source_clip.mp4 into result.zip best-effort, and the client (rotoscoping.rs unzip_output) extracts both into assets/rotoscope_*/ so get_rotoscope_output_files lights up the Open-video button. Single-fetch design (no new endpoint) was deliberate: /result reaps work_dir on the same fetch, so a separate download would lose the race. Still-current ffmpeg facts kept below: compose_video uses the concat demuxer (not -pattern_type glob) for Windows portability, and VP9 alpha probes as pix_fmt=yuv420p + TAG:alpha_mode=1 (alpha is a side layer), not yuva420p."
 created: 2026-06-06
 updated: 2026-06-06
 ---
+
+> **RESOLVED in T-017.** The bridge gap described below is closed. The fix:
+> `_compose_outputs` writes `output.webm` into `output_dir` (alongside the PNGs and
+> `source_clip.mp4`, fixing the old split-dir); `_finalize` runs `_compose_outputs`
+> BEFORE `_zip_output`; `_zip_output` folds `output.webm` + `source_clip.mp4` into
+> `result.zip` (best-effort, `exists()`-guarded, PNGs still guaranteed); and the client
+> `unzip_output` (renamed from `unzip_pngs`) extracts the two named videos plus the PNGs
+> into `assets/rotoscope_*/`, with `frame_count` still PNG-only. One ZIP, one fetch --
+> deliberately no new download endpoint, because `/result`'s `BackgroundTask(_cleanup)`
+> reaps the work_dir on that same fetch and a second request would lose the race. The
+> historical analysis below is kept for the ffmpeg facts, which are unchanged.
 
 T-016 added post-job artifacts to the rotoscoping microservice: after `_zip_output`,
 `_finalize` now composes the PNG sequence into a transparent `work_dir/output.webm`

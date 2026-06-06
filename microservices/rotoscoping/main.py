@@ -116,11 +116,24 @@ async def health() -> dict:
 
 
 def _zip_output(output_dir: Path, zip_path: Path) -> None:
-    """Zip every PNG in output_dir (sorted) into zip_path."""
+    """Zip the PNG sequence into zip_path, plus the composed video and archived
+    source clip when present.
+
+    The `frame_*.png` sequence is the guaranteed primary artifact. `output.webm`
+    (the composed transparent video) and `source_clip.mp4` (the archived source)
+    are written by `_compose_outputs`, which must run BEFORE this, but both are
+    best-effort: a missing extra is skipped, never fatal -- the client only needs
+    the PNGs to succeed. The client (rotoscoping.rs) extracts all three from this
+    single ZIP, since /result reaps the work_dir right after serving it.
+    """
     pngs = sorted(output_dir.glob("frame_*.png"))
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for png in pngs:
             zf.write(png, arcname=png.name)
+        for extra in ("output.webm", "source_clip.mp4"):
+            path = output_dir / extra
+            if path.exists():
+                zf.write(path, arcname=extra)
 
 
 def _run_job_blocking(
@@ -159,23 +172,28 @@ def _run_job_blocking(
 
 
 def _compose_outputs(
-    video_path: Path, output_dir: Path, work_dir: Path, source_fps: float, frame_skip: int
+    video_path: Path, output_dir: Path, source_fps: float, frame_skip: int
 ) -> None:
-    """Best-effort post-zip artifacts: a transparent video + the source clip.
+    """Best-effort extra artifacts: a transparent video + the source clip.
 
-    Composes the PNG sequence into `work_dir/output.webm` at the effective output
-    fps (source fps / (frame_skip + 1), matching the decimation), and copies the
-    uploaded clip into `output_dir/source_clip.mp4`. The upload is always the
-    frame-accurately clipped source the client submitted (the client trims/clips
-    before upload -- see T-015), so this archive is real, not a placeholder.
+    Composes the PNG sequence into `output_dir/output.webm` at the effective
+    output fps (source fps / (frame_skip + 1), matching the decimation), and
+    copies the uploaded clip into `output_dir/source_clip.mp4`. The upload is
+    always the frame-accurately clipped source the client submitted (the client
+    trims/clips before upload -- see T-015), so this archive is real, not a
+    placeholder.
+
+    Both artifacts land in `output_dir` (alongside the PNGs) so `_zip_output` can
+    fold them into result.zip -- the only way they reach the client, since
+    /result reaps the work_dir right after serving the ZIP. This runs BEFORE
+    `_zip_output` so the files exist when the zip is built.
 
     Both steps are wrapped so a failure here never fails the job: the zipped PNG
-    sequence is the primary artifact and is already recorded by the time this
-    runs. Logs and swallows; raises nothing.
+    sequence is the primary artifact. Logs and swallows; raises nothing.
     """
     try:
         effective_fps = source_fps / (frame_skip + 1)
-        ffmpeg_helper.compose_video(output_dir, work_dir / "output.webm", effective_fps)
+        ffmpeg_helper.compose_video(output_dir, output_dir / "output.webm", effective_fps)
     except Exception:  # pragma: no cover - best-effort, never fail the job
         logger.exception("compose_video failed; continuing with zip only")
     try:
@@ -212,15 +230,14 @@ def _finalize(
             if work_dir is not None:
                 shutil.rmtree(work_dir, ignore_errors=True)
             return
+        # Compose the extras (transparent video + archived source clip) into
+        # output_dir FIRST, so _zip_output can fold them into result.zip -- the
+        # single fetch the client makes. Best-effort: a compose failure must not
+        # flip the job to error, since the PNG sequence is the primary artifact.
+        _compose_outputs(video_path, output_dir, source_fps, frame_skip)
         zip_path = (work_dir or output_dir.parent) / "result.zip"
         _zip_output(output_dir, zip_path)
         job.zip_path = zip_path
-        # Post-zip extras (composed video + archived source clip). Best-effort:
-        # the zip is already the recorded primary artifact, so a compose failure
-        # must not flip the job to error.
-        _compose_outputs(
-            video_path, output_dir, work_dir or output_dir.parent, source_fps, frame_skip
-        )
         job.update(stage="done", progress=1.0, frames_done=written)
     except sam2_engine.RotoscopeCancelled:
         job.update(stage="cancelled")
