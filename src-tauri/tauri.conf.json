@@ -24,7 +24,10 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$DOCUMENT/ClaudeMotion/projects/**/extractions/**"]
+        "scope": [
+          "$DOCUMENT/ClaudeMotion/projects/**/extractions/**",
+          "$DOCUMENT/ClaudeMotion/projects/**/assets/**"
+        ]
       }
     }
   },
