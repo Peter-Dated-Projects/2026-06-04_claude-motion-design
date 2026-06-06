@@ -8,6 +8,7 @@ import PointOverlay from "./PointOverlay";
 import RotoControls from "./RotoControls";
 import ReviewModal from "./ReviewModal";
 import ProcessingView from "./ProcessingView";
+import ComparisonPlayer from "./ComparisonPlayer";
 
 /**
  * The rotoscoping stage's left "Video" pane -- the full interaction surface.
@@ -279,8 +280,6 @@ export default function RotoVideoPanel() {
     const stored = localStorage.getItem(COMPARE_LAYOUT_KEY);
     return stored === "stacked" ? "stacked" : "side-by-side";
   });
-  const [comparisonFrame, setComparisonFrame] = useState(0);
-  const rafRef = useRef<number | null>(null);
 
   const fps = video?.fps ?? ASSUMED_FPS;
   const isJobRunning = phase === "uploading" || phase === "processing";
@@ -308,27 +307,6 @@ export default function RotoVideoPanel() {
   useEffect(() => {
     if (!canCompare) setComparisonActive(false);
   }, [canCompare]);
-
-  // rAF loop: source video drives sequence frame in comparison mode.
-  useEffect(() => {
-    if (!comparisonActive || !loadedSequence) return;
-    const count = loadedSequence.urls.length;
-    const tick = () => {
-      const vid = playerRef.current;
-      if (vid) {
-        const frame = Math.min(
-          count - 1,
-          Math.max(0, Math.round(vid.currentTime * fps / (frameSkip + 1))),
-        );
-        setComparisonFrame(frame);
-      }
-      rafRef.current = requestAnimationFrame(tick);
-    };
-    rafRef.current = requestAnimationFrame(tick);
-    return () => {
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-    };
-  }, [comparisonActive, loadedSequence, fps, frameSkip]);
 
   const toggleLayout = () => {
     setCompareLayout((prev) => {
@@ -446,35 +424,14 @@ export default function RotoVideoPanel() {
       </div>
 
       {comparisonActive && canCompare && videoUrl ? (
-        <div className={`roto-compare roto-compare--${compareLayout}`}>
-          <div className="roto-compare__half">
-            <video
-              ref={playerRef}
-              className="roto-compare__vid"
-              src={videoUrl}
-              playsInline
-              onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-            />
-            <span className="roto-compare__tag">Source</span>
-          </div>
-          <div className="roto-compare__half roto-compare__half--seq">
-            {loadedSequence.urls[comparisonFrame] ? (
-              <img
-                className="roto-compare__img"
-                src={loadedSequence.urls[comparisonFrame]}
-                alt="rotoscoped frame"
-                draggable={false}
-              />
-            ) : null}
-            <span className="roto-compare__tag">Output</span>
-            {/* Hidden preload strip so first-pass loop doesn't flicker. */}
-            <div className="roto-video__seq-preload" aria-hidden>
-              {loadedSequence.urls.map((u) => (
-                <img key={u} src={u} alt="" />
-              ))}
-            </div>
-          </div>
-        </div>
+        <ComparisonPlayer
+          videoUrl={videoUrl}
+          sequence={loadedSequence}
+          effectiveDuration={effectiveDuration ?? 0}
+          fps={fps}
+          frameSkip={frameSkip}
+          layout={compareLayout}
+        />
       ) : loadedSequence ? (
         // A completed output's PNG sequence is loaded: play it as looping
         // stop-motion. Takes priority over the source-video setup flow; Close
