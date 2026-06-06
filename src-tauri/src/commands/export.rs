@@ -9,16 +9,16 @@
 // The save dialog is driven from Rust via tauri_plugin_dialog::DialogExt, which
 // bypasses the webview capability system -- it needs only `dialog:default`
 // (already present) to load the plugin, no extra `dialog:allow-*` entry.
-//
-// NOTE: like the other command files, this is not yet registered in lib.rs's
-// invoke_handler -- wiring it in (and mounting ExportMenu in the toolbar) is left
-// to the integration pass, since lib.rs and Toolbar.tsx are outside this ticket's
-// scope.
 
 use std::fs;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use std::process::{Command, Stdio};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
+
+use crate::commands::render_toolchain;
 
 /// Sentinel error returned when the user dismisses the file dialog. The frontend
 /// treats this specially (no error toast) -- a cancel is not a failure.
@@ -100,4 +100,141 @@ pub fn export_tsx(app: AppHandle, slug: String) -> Result<String, String> {
     }
 
     Ok(path.to_string_lossy().to_string())
+}
+
+// ---- MP4 export -----------------------------------------------------------
+//
+// Renders the project's animation.tsx to an H.264 MP4 by shelling out to the
+// repo's Node render script (scripts/render-mp4.mjs), which drives Remotion's
+// bundler + renderer (headless Chrome + ffmpeg). We spawn `node` directly --
+// like pty_bridge spawns `claude` -- so the Tauri shell-capability model is not
+// involved.
+//
+// LOCAL-NODE APPROACH (dev / dogfooding): the script and its node_modules live
+// in the repo, located here via CARGO_MANIFEST_DIR (the src-tauri dir) -> its
+// parent is the repo root. This works when running from the repo (npm run
+// tauri dev / a dev build). Shipping to users with nothing installed needs a
+// bundled Node+Chromium sidecar instead -- a separate step.
+
+/// Progress event payload (0.0..1.0). Emitted on `export://progress` as the
+/// render advances so the UI can show a determinate bar instead of a spinner.
+#[derive(Clone, Serialize)]
+struct RenderProgress {
+    progress: f64,
+}
+
+/// Resolve which Node + render script to run, as `(node, script, cwd)`.
+///
+/// Preference order:
+///   1. The installed on-demand toolchain in app-data (the shipped path).
+///   2. DEV FALLBACK: the repo's own scripts/render-mp4.mjs + node_modules via a
+///      `node` on PATH, so contributors can render without first downloading the
+///      toolchain. Only viable when running from the repo (CARGO_MANIFEST_DIR
+///      still points at a real checkout) -- never true in a packaged app.
+///
+/// Returns `Err(TOOLCHAIN_MISSING)` when neither is available; the frontend turns
+/// that into the first-render install prompt rather than an error.
+fn resolve_runner(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    if render_toolchain::is_installed(app) {
+        let node = render_toolchain::node_bin(app)?;
+        let script = render_toolchain::render_script(app)?;
+        let cwd = node
+            .parent()
+            .and_then(|p| p.parent())
+            .ok_or_else(|| "bad toolchain layout".to_string())?
+            .to_path_buf();
+        return Ok((node, script, cwd));
+    }
+
+    if let Some((script, cwd)) = render_toolchain::dev_fallback() {
+        return Ok((PathBuf::from("node"), script, cwd));
+    }
+
+    Err(render_toolchain::TOOLCHAIN_MISSING.to_string())
+}
+
+#[tauri::command]
+pub fn export_mp4(app: AppHandle, slug: String) -> Result<String, String> {
+    let dir = projects_root(&app)?.join(&slug);
+    if !dir.is_dir() {
+        return Err(format!("project '{slug}' not found"));
+    }
+
+    // Guard against rendering an empty project: an empty animation.tsx has no
+    // default export and Remotion would fail with a cryptic message.
+    let tsx_path = dir.join("animation.tsx");
+    let code = fs::read_to_string(&tsx_path)
+        .map_err(|e| format!("failed to read animation.tsx: {e}"))?;
+    if code.trim().is_empty() {
+        return Err("animation.tsx is empty -- generate an animation first.".to_string());
+    }
+
+    // Resolve the renderer up front: if the toolchain isn't installed (and no dev
+    // fallback), bail with TOOLCHAIN_MISSING *before* popping a save dialog so the
+    // frontend can show the install prompt instead.
+    let (node, script, cwd) = resolve_runner(&app)?;
+
+    let chosen = app
+        .dialog()
+        .file()
+        .add_filter("MP4 Video", &["mp4"])
+        .set_file_name(&format!("{slug}.mp4"))
+        .blocking_save_file();
+    let out = match chosen {
+        Some(fp) => fp
+            .into_path()
+            .map_err(|e| format!("invalid save path: {e}"))?,
+        None => return Err(CANCELLED.to_string()),
+    };
+
+    let mut child = Command::new(&node)
+        .arg(&script)
+        .arg(&dir)
+        .arg(&out)
+        .current_dir(&cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to launch the render process: {e}"))?;
+
+    // Drain stderr on a separate thread so a chatty render (e.g. the first-run
+    // Chrome download) can't fill the pipe buffer and deadlock the child while
+    // we block reading stdout.
+    let stderr = child.stderr.take();
+    let stderr_handle = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(mut se) = stderr {
+            let _ = se.read_to_string(&mut buf);
+        }
+        buf
+    });
+
+    // Parse `PROGRESS <0..1>` lines off stdout and forward them as events.
+    if let Some(stdout) = child.stdout.take() {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Some(rest) = line.strip_prefix("PROGRESS ") {
+                if let Ok(progress) = rest.trim().parse::<f64>() {
+                    let _ = app.emit("export://progress", RenderProgress { progress });
+                }
+            }
+        }
+    }
+
+    let status = child
+        .wait()
+        .map_err(|e| format!("render process failed: {e}"))?;
+    let stderr_text = stderr_handle.join().unwrap_or_default();
+
+    if status.success() {
+        Ok(out.to_string_lossy().to_string())
+    } else {
+        // Surface the last few stderr lines -- the real Remotion error tail.
+        let tail: Vec<&str> = stderr_text.lines().rev().take(8).collect();
+        let msg: String = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+        Err(if msg.trim().is_empty() {
+            "MP4 render failed.".to_string()
+        } else {
+            msg
+        })
+    }
 }

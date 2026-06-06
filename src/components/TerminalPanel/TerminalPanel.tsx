@@ -6,6 +6,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { useProjectStore } from "../../store/projectStore";
+import { useThemeStore } from "../../store/themeStore";
 import "./TerminalPanel.css";
 
 // ---------------------------------------------------------------------------
@@ -19,13 +20,24 @@ interface ExitPayload {
   code: number | null;
 }
 
-// A light theme that matches the app's panels.
-const TERMINAL_THEME = {
+// xterm themes matching the app's light/dark panels. Selected by the active app
+// theme; switching re-applies `term.options.theme` on the live instance.
+const TERMINAL_THEME_LIGHT = {
   background: "#ffffff",
   foreground: "#1f1f1f",
   cursor: "#1f1f1f",
   selectionBackground: "#cfe0fb",
 };
+
+const TERMINAL_THEME_DARK = {
+  background: "#1e1e1e",
+  foreground: "#e6e6e6",
+  cursor: "#e6e6e6",
+  selectionBackground: "#27496f",
+};
+
+const terminalTheme = (theme: "light" | "dark") =>
+  theme === "dark" ? TERMINAL_THEME_DARK : TERMINAL_THEME_LIGHT;
 
 /**
  * Format dropped filesystem paths for insertion into the Claude prompt, matching
@@ -49,6 +61,7 @@ function formatDroppedPaths(paths: string[]): string {
  */
 function TerminalPanel() {
   const slug = useProjectStore((s) => s.activeProject?.slug ?? null);
+  const theme = useThemeStore((s) => s.theme);
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -64,6 +77,10 @@ function TerminalPanel() {
   // Hard re-entrancy guard: blocks a double-spawn from rapid restart clicks or
   // an in-flight open racing a slug change, independent of React's async state.
   const openingRef = useRef(false);
+  // The project we've already auto-opened a session for. Ensures the open effect
+  // fires AT MOST ONCE per project: re-renders, `listening` toggling, or effect
+  // re-runs for the SAME slug must not respawn (and thus reset) a live session.
+  const openedSlugRef = useRef<string | null>(null);
 
   // --- The single (re)open path, shared by the [slug] effect and the Restart
   //     button. PtyBridge::open kills any predecessor + spawns fresh, so calling
@@ -98,7 +115,9 @@ function TerminalPanel() {
       fontFamily:
         '"SF Mono", "JetBrains Mono", Menlo, Consolas, "Courier New", monospace',
       fontSize: 12,
-      theme: TERMINAL_THEME,
+      // Seed from the current theme; a separate effect keeps it in sync. Read
+      // via getState so this create-once effect doesn't depend on `theme`.
+      theme: terminalTheme(useThemeStore.getState().theme),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -138,6 +157,12 @@ function TerminalPanel() {
       fitRef.current = null;
     };
   }, []);
+
+  // --- Re-skin the live terminal when the app theme changes. -----------------
+  useEffect(() => {
+    const term = termRef.current;
+    if (term) term.options.theme = terminalTheme(theme);
+  }, [theme]);
 
   // --- Stream PTY output + exit into the terminal. ---------------------------
   useEffect(() => {
@@ -191,17 +216,26 @@ function TerminalPanel() {
 
     let unlisten: UnlistenFn | undefined;
     let disposed = false;
+    // Whether the most recent enter/over hovered the terminal host. We gate the
+    // drop on THIS rather than re-hit-testing the drop event's own position: the
+    // `drop` payload's position is documented as unreliable (notably inaccurate
+    // while devtools is attached), whereas the enter/over stream is accurate.
+    let overHost = false;
 
     void getCurrentWebview()
       .onDragDropEvent((event) => {
         const p = event.payload;
         if (p.type === "enter" || p.type === "over") {
-          setDropActive(isOverHost(p.position.x, p.position.y));
+          overHost = isOverHost(p.position.x, p.position.y);
+          setDropActive(overHost);
         } else if (p.type === "leave") {
+          overHost = false;
           setDropActive(false);
         } else if (p.type === "drop") {
           setDropActive(false);
-          if (!p.paths.length || !isOverHost(p.position.x, p.position.y)) return;
+          const wasOverHost = overHost;
+          overHost = false;
+          if (!p.paths.length || !wasOverHost) return;
           const data = formatDroppedPaths(p.paths);
           if (data) void invoke("terminal_input", { data }).catch(() => {});
         }
@@ -228,6 +262,8 @@ function TerminalPanel() {
   //     remounted (e.g. a panel rearrange), which is the session-dies bug.
   useEffect(() => {
     if (!slug || !listening) return;
+    if (openedSlugRef.current === slug) return; // already opened this project
+    openedSlugRef.current = slug;
     void openSession();
   }, [slug, listening, openSession]);
 

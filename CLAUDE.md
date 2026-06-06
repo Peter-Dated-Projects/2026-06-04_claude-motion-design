@@ -59,7 +59,21 @@ Rust `#[tauri::command]`; the backend pushes streams via `emit` → frontend
 - `commands/projects.rs` — project CRUD, file I/O, assets (`add_asset` takes bytes),
   conversation persistence, reveal-in-finder
 - `commands/claude.rs` — `check_claude_installed`, `get/set_claude_cli`
-- `commands/export.rs`, `commands/zip.rs` — TSX / ZIP export + import
+- `commands/export.rs` — `export_tsx` (writes animation.tsx + assets) and `export_mp4`
+  (renders to video — see "MP4 export" below). `commands/zip.rs` — ZIP export + import
+- `commands/render_toolchain.rs` — on-demand MP4-render toolchain: `render_toolchain_status`
+  + `install_render_toolchain` (download → sha256-verify → unpack into app-data,
+  streaming `toolchain://progress`). The `TOOLCHAIN` const holds the hosted archive's
+  url/sha256/size — produced + reported by `scripts/build-render-toolchain.mjs`.
+
+### Render / scripts
+- `scripts/render-mp4.mjs` — Node script driving Remotion's bundler + renderer
+  (headless Chrome + ffmpeg) to turn a project's `animation.tsx` into an H.264 MP4.
+  Writes a throwaway entry that wraps the animation's default export in a
+  `<Composition>` (1080x1920, fps/duration resolved exactly like the preview).
+  Streams `PROGRESS <0..1>` lines on stdout.
+- `scripts/build-preview-runtime.mjs` — builds the bundled browser Remotion runtime
+  resource used by the preview sandbox.
 
 ### Config
 - `src-tauri/tauri.conf.json` — window, bundle, CSP. Note: `dragDropEnabled` is

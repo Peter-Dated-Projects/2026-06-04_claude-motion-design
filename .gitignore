@@ -9,3 +9,6 @@ dist/
 
 # Rust / Tauri build artifacts
 src-tauri/target/
+
+# Built MP4-render toolchain archives (uploaded as release assets, not tracked)
+dist-toolchain/

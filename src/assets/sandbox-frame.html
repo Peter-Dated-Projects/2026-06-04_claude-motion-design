@@ -109,6 +109,13 @@
           parent.postMessage(msg, "*");
         }
 
+        // Narrate sandbox-side events into the parent's render-log drawer (the one place
+        // preview events are visible). Without this, a runtime that fails to load or a
+        // bundle that dies mid-execution leaves the log silent.
+        function logToParent(level, message) {
+          post({ type: "log", level: level, message: message });
+        }
+
         // Persistent capture of runtime errors thrown DURING playback -- e.g. a bad
         // interpolate range or an undefined helper that only blows up on a later frame,
         // long after renderOk. These would otherwise be swallowed (the preview just
@@ -242,8 +249,22 @@
           if (data.type === "render") {
             (async function () {
               try {
+                logToParent(
+                  "info",
+                  "render: executing bundle (" +
+                    (data.bundle ? data.bundle.length : 0) +
+                    " bytes)",
+                );
                 if (!window.React || !window.ReactDOM || !window.RemotionRuntime) {
-                  throw new Error("Preview runtime failed to load.");
+                  throw new Error(
+                    "Preview runtime failed to load (React=" +
+                      !!window.React +
+                      ", ReactDOM=" +
+                      !!window.ReactDOM +
+                      ", RemotionRuntime=" +
+                      !!window.RemotionRuntime +
+                      "). One of the inlined runtime scripts did not expose its global.",
+                  );
                 }
                 // Fresh global before each run so a failed compile can't leave a stale component.
                 window.AnimationExports = undefined;
@@ -271,6 +292,14 @@
                 COMPOSITION.fps = resolved.fps;
                 COMPOSITION.durationInFrames = resolved.durationInFrames;
 
+                logToParent(
+                  "info",
+                  "render: component resolved, mounting Player (" +
+                    resolved.fps +
+                    " fps, " +
+                    resolved.durationInFrames +
+                    " frames)",
+                );
                 renderState.Component = Component;
                 if (!root) {
                   root = window.ReactDOM.createRoot(document.getElementById("root"));
@@ -327,6 +356,21 @@
           }
           requestAnimationFrame(tick);
         })();
+
+        // Report which runtime globals the injected scripts actually exposed. If any are
+        // missing here, the runtime bundle failed to load and every render will throw
+        // "Preview runtime failed to load." -- this line is the smoking gun for that.
+        var runtimeOk = !!(window.React && window.ReactDOM && window.RemotionRuntime);
+        logToParent(
+          runtimeOk ? "info" : "error",
+          "sandbox shell ready (React=" +
+            !!window.React +
+            ", ReactDOM=" +
+            !!window.ReactDOM +
+            ", RemotionRuntime=" +
+            !!window.RemotionRuntime +
+            ")",
+        );
 
         // Tell the parent the sandbox shell is ready to receive a render.
         post({ type: "sandboxReady" });

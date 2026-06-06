@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -228,17 +229,9 @@ export default function SplitLayout({
   // drop, so these stay valid for the whole gesture.
   const rects = useRef<Partial<Record<PanelId, DOMRect>>>({});
 
-  // Each leaf body registers its DOM node here. We render the panels ONCE (at
-  // the root, below) and portal each into whichever slot it currently occupies,
-  // rather than rendering them inline in the recursive tree. This is what keeps
-  // a panel's component instance ALIVE across a drag-to-rearrange: the live
-  // xterm + Claude PTY session, the preview iframe, and Monaco editor state all
-  // survive. Inline rendering reparented the panel to a new position in the
-  // element tree on every restructure, which React reconciles as unmount +
-  // remount -- which tore down the PTY session (TerminalPanel's cleanup kills
-  // the `claude` process). On a move the old leaf deregisters (el=null) and the
-  // new leaf registers in the same commit; the batched update nets to the new
-  // node, so the portal just re-attaches its DOM without unmounting.
+  // Each leaf body registers its DOM node here so we know WHERE each panel
+  // should currently live. The panel itself is NOT rendered into this slot --
+  // see the persistent-host machinery below for why.
   const [slots, setSlots] = useState<Partial<Record<PanelId, HTMLElement>>>({});
   const registerSlot = useCallback((id: PanelId, el: HTMLElement | null) => {
     setSlots((prev) => {
@@ -269,6 +262,60 @@ export default function SplitLayout({
     },
     [registerSlot],
   );
+
+  // --- Persistent panel hosts: the panel is NEVER unmounted by layout changes -
+  // Each panel is portaled into its OWN stable, never-unmounted <div> (created
+  // once, kept in this ref for the life of the layout). Because the portal
+  // TARGET never changes, the panel's React instance -- and with it the live
+  // Claude PTY/xterm, the preview iframe, and Monaco editor state -- is never
+  // torn down, no matter how the tree is dragged, RESET, nested, or how panels
+  // are hidden/shown. The only thing that moves is this raw host <div>, which a
+  // layout effect appendChild's into whichever leaf slot the panel occupies.
+  //
+  // This is strictly more robust than portaling straight into the leaf slot:
+  // during a full-tree reset every leaf div unmounts at once, so the slot a
+  // panel portaled into briefly became null -- unmounting the panel and
+  // restarting Claude. A stable host that we merely re-parent can't hit that.
+  const panelHosts = useRef<Map<PanelId, HTMLDivElement>>(new Map());
+  const getPanelHost = (id: PanelId): HTMLDivElement => {
+    let host = panelHosts.current.get(id);
+    if (!host) {
+      host = document.createElement("div");
+      host.className = "split-panel-host";
+      panelHosts.current.set(id, host);
+    }
+    return host;
+  };
+
+  // Panel ids whose portal is kept mounted. Grows monotonically: once a panel
+  // has been shown we keep its instance alive even while it is hidden, so
+  // re-showing it never rebuilds it (a hidden-then-shown Claude panel must keep
+  // its session). A genuine reset only happens on a project switch, which the
+  // panel components handle themselves -- never here.
+  const [mountedIds, setMountedIds] = useState<PanelId[]>(() => getLeaves(value));
+  useEffect(() => {
+    setMountedIds((prev) => {
+      const missing = getLeaves(value).filter((id) => !prev.includes(id));
+      return missing.length ? [...prev, ...missing] : prev;
+    });
+  }, [value]);
+
+  // Re-parent each panel's host into its current leaf slot, or detach it while
+  // the panel is hidden (no slot). Layout phase so the move commits before
+  // paint -- no flicker. appendChild relocates an already-parented node, so a
+  // rearrange just moves the live DOM subtree intact.
+  useLayoutEffect(() => {
+    for (const id of mountedIds) {
+      const host = panelHosts.current.get(id);
+      if (!host) continue;
+      const slot = slots[id];
+      if (slot) {
+        if (host.parentNode !== slot) slot.appendChild(host);
+      } else if (host.parentNode) {
+        host.parentNode.removeChild(host);
+      }
+    }
+  }, [slots, mountedIds]);
 
   const resetDrag = () => {
     setDragId(null);
@@ -381,14 +428,11 @@ export default function SplitLayout({
         panelTitles={panelTitles}
         drag={drag}
       />
-      {/* Panels live here, mounted once, portaled into their current leaf slot.
-          Keyed by panel id (createPortal's 3rd arg) so identity -- and thus the
-          PTY session / iframe / editor state -- is preserved when getLeaves'
-          order changes on a rearrange. */}
-      {getLeaves(value).map((id) => {
-        const host = slots[id];
-        return host ? createPortal(renderPanel(id), host, id) : null;
-      })}
+      {/* Panels are mounted ONCE here and portaled into their stable per-panel
+          host divs (which the layout effect positions into the tree). Keyed by
+          id so identity -- and thus the PTY session / iframe / editor state --
+          never churns when the tree shape or panel order changes. */}
+      {mountedIds.map((id) => createPortal(renderPanel(id), getPanelHost(id), id))}
       {dragStarted && (
         // Full-viewport transparent shield above the preview iframe / Monaco so
         // pointermove/up keep reaching us instead of being swallowed by those

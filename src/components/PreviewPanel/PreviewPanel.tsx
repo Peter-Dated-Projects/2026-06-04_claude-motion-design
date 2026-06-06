@@ -139,18 +139,28 @@ function buildSrcDoc(): string {
   const runtime = [reactRuntime, reactDomRuntime, previewRuntime]
     .map(inlineScript)
     .join("\n");
-  return sandboxFrameHtml.replace("<!--RUNTIME-->", runtime);
+  // Use a REPLACEMENT FUNCTION, not a string. With a string replacement, String.replace
+  // interprets `$$`, `$&`, `` $` ``, `$'` as special patterns -- and minified React/Remotion
+  // is full of them (e.g. React's `$$typeof`, minifier vars like `x$` before `&&`). A string
+  // replacement would collapse `$$`->`$` and splice the matched `<!--RUNTIME-->` text in place
+  // of every `$&`, corrupting the injected JS into syntax errors so the runtime globals never
+  // get set ("Preview runtime failed to load."). A function's return value is inserted verbatim.
+  return sandboxFrameHtml.replace("<!--RUNTIME-->", () => runtime);
 }
+
+type LogLevel = "info" | "warn" | "error";
 
 type WorkerMessage =
   | { type: "compiled"; bundle: string; id?: number }
-  | { type: "error"; message: string; id?: number };
+  | { type: "error"; message: string; id?: number }
+  | { type: "log"; level: LogLevel; message: string };
 
 type SandboxMessage =
   | { type: "sandboxReady" }
   | { type: "renderOk"; fps?: number; durationInFrames?: number }
   | { type: "renderError"; message: string }
   | { type: "runtimeError"; message: string }
+  | { type: "log"; level: LogLevel; message: string }
   | {
       type: "frameUpdate";
       frame: number;
@@ -167,9 +177,17 @@ const LOG_DRAWER_HEIGHT = 160;
 const DEFAULT_FPS = 30;
 
 // How long to wait for a compile+render round-trip before declaring the preview
-// stuck. Generous enough to cover the first-compile esbuild-wasm init + iframe load,
-// short enough that a real hang surfaces a Retry instead of an endless spinner.
-const WATCHDOG_MS = 5000;
+// stuck and offering a Retry. Two tiers, because the FIRST compile after launch also
+// has to cover the one-time esbuild-wasm init -- fetching + compiling a ~12 MB binary,
+// which the worker itself caps at 10s (INIT_TIMEOUT_MS in sandbox-compiler.worker.ts).
+// A single 5s watchdog trips mid-init on a cold/slow machine and shows a false timeout
+// while compilation is still legitimately in flight, so the cold tier sits comfortably
+// above that 10s init cap. Once we've seen the first compiled bundle (proof esbuild is
+// initialized), every later compile is sub-second, so we drop to the tight warm tier
+// and a genuine hang still surfaces quickly. Keep COLD_WATCHDOG_MS > the worker's
+// INIT_TIMEOUT_MS if either changes.
+const COLD_WATCHDOG_MS = 13_000;
+const WARM_WATCHDOG_MS = 5_000;
 
 interface PreviewPanelProps {
   /** Current animation source, owned by the parent (App). Empty/undefined before a
@@ -223,6 +241,10 @@ function PreviewPanel({ code }: PreviewPanelProps) {
   // Watchdog timer for the current generation. If neither renderOk/renderError nor a
   // worker error arrives in time, it clears the stuck "Compiling preview..." overlay.
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Flipped true once the worker returns its first compiled bundle -- proof the one-time
+  // esbuild-wasm init finished. Picks the watchdog tier in startCompile: cold (covers
+  // init) before, warm (tight) after.
+  const warmedUpRef = useRef(false);
 
   const postToSandbox = useCallback((msg: unknown) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
@@ -248,6 +270,8 @@ function PreviewPanel({ code }: PreviewPanelProps) {
     setIsLoading(true);
     logAdd("info", "compile", "Compiling animation...");
     workerRef.current?.postMessage({ type: "compile", code: source, id: gen });
+    // Cold tier until the first bundle proves esbuild is initialized; tight after.
+    const watchdogMs = warmedUpRef.current ? WARM_WATCHDOG_MS : COLD_WATCHDOG_MS;
     watchdogRef.current = setTimeout(() => {
       watchdogRef.current = null;
       setIsLoading(false);
@@ -255,7 +279,8 @@ function PreviewPanel({ code }: PreviewPanelProps) {
       logAdd("error", "watchdog", msg);
       setError(msg);
       setCanRetry(true);
-    }, WATCHDOG_MS);
+      setShowLog(true);
+    }, watchdogMs);
   }, [source, clearWatchdog, logAdd]);
 
   // --- Worker: TSX -> compiled IIFE -------------------------------------------------
@@ -268,10 +293,20 @@ function PreviewPanel({ code }: PreviewPanelProps) {
 
     worker.onmessage = (ev: MessageEvent<WorkerMessage>) => {
       const data = ev.data;
+      // Out-of-band progress log from the worker (esbuild init / transform narration).
+      // Untagged (no id), so it's never gated by generation below.
+      if (data.type === "log") {
+        logAdd(data.level, "compile", data.message);
+        if (data.level === "error") setShowLog(true);
+        return;
+      }
       // Ignore replies for a superseded generation -- a newer source change has
       // already bumped the generation and posted its own compile.
       if (typeof data.id === "number" && data.id !== generationRef.current) return;
       if (data.type === "compiled") {
+        // First compiled bundle proves esbuild-wasm finished initializing, so later
+        // compiles no longer need the cold (init-covering) watchdog budget.
+        warmedUpRef.current = true;
         setError(null);
         logAdd("info", "compile", `Compiled (${data.bundle.length} bytes)`);
         pendingBundleRef.current = data.bundle;
@@ -293,6 +328,7 @@ function PreviewPanel({ code }: PreviewPanelProps) {
         logAdd("error", "compile", data.message);
         setError(data.message);
         setIsLoading(false);
+        setShowLog(true);
       }
     };
     worker.onerror = (ev) => {
@@ -301,6 +337,7 @@ function PreviewPanel({ code }: PreviewPanelProps) {
       logAdd("error", "compile", msg);
       setError(msg);
       setIsLoading(false);
+      setShowLog(true);
     };
 
     return () => {
@@ -317,7 +354,11 @@ function PreviewPanel({ code }: PreviewPanelProps) {
       const data = ev.data;
       if (!data || typeof data.type !== "string") return;
 
-      if (data.type === "sandboxReady") {
+      if (data.type === "log") {
+        // Sandbox-side narration (runtime-globals presence, bundle execution).
+        logAdd(data.level, "render", data.message);
+        if (data.level === "error") setShowLog(true);
+      } else if (data.type === "sandboxReady") {
         sandboxReadyRef.current = true;
         if (pendingBundleRef.current) {
           postToSandbox({ type: "render", bundle: pendingBundleRef.current });
@@ -337,6 +378,7 @@ function PreviewPanel({ code }: PreviewPanelProps) {
         logAdd("error", "render", data.message);
         setError(data.message);
         setIsLoading(false);
+        setShowLog(true);
       } else if (data.type === "runtimeError") {
         // A throw DURING playback, after renderOk -- the sandbox's persistent error
         // listener forwards these. Log it but do NOT touch error/loading state: the

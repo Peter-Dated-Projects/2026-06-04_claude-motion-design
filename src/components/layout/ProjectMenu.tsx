@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useProjectStore } from '../../store/projectStore';
 import type { Project } from '../../types';
+import { ChevronDownIcon } from '../icons';
 
 const CANCELLED = 'cancelled';
 
@@ -108,9 +109,7 @@ function ProjectMenu() {
         onClick={() => setOpen((v) => !v)}
       >
         Project
-        <span className="project-menu__caret" aria-hidden="true">
-          {'▾'}
-        </span>
+        <ChevronDownIcon className="project-menu__caret" />
       </button>
 
       {open && (

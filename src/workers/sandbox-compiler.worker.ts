@@ -31,6 +31,15 @@ type CompileResult =
   | { type: "compiled"; bundle: string; id?: number }
   | { type: "error"; message: string; id?: number };
 
+// Out-of-band progress log. The render-log drawer is the one place preview events are
+// visible, but it only gets entries when a message arrives -- so the slow, failure-prone
+// esbuild-wasm init (fetch + compile a ~12 MB binary) used to run dead silent. These
+// untagged log messages (no `id`, so PreviewPanel never gates them by compile generation)
+// narrate that init and surface exactly where a hang or failure lands.
+function emitLog(level: "info" | "warn" | "error", message: string): void {
+  ctx.postMessage({ type: "log", level, message });
+}
+
 // Bare module specifiers the generated animation may import, mapped to the runtime globals
 // the sandbox iframe loads. Everything Remotion/Player exports lives on window.RemotionRuntime.
 const GLOBAL_FOR: Record<string, string> = {
@@ -133,6 +142,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 // rejections (which the onmessage catch turns into a {type:'error'} reply), and
 // compiling from bytes sidesteps the streaming-compile MIME requirement.
 async function initEsbuild(): Promise<void> {
+  emitLog("info", `esbuild-wasm: fetching binary from ${wasmURL}`);
   const res = await fetch(wasmURL);
   if (!res.ok) {
     throw new Error(
@@ -140,8 +150,11 @@ async function initEsbuild(): Promise<void> {
     );
   }
   const bytes = await res.arrayBuffer();
+  emitLog("info", `esbuild-wasm: fetched ${bytes.byteLength} bytes, compiling module...`);
   const wasmModule = await WebAssembly.compile(bytes);
+  emitLog("info", "esbuild-wasm: module compiled, initializing...");
   await esbuild.initialize({ wasmModule, worker: false });
+  emitLog("info", "esbuild-wasm: ready");
 }
 
 let initPromise: Promise<void> | null = null;
@@ -171,6 +184,7 @@ let processing = false;
 async function compileOne(req: CompileRequest): Promise<CompileResult> {
   try {
     await ensureInit();
+    emitLog("info", `transforming TSX (${req.code.length} chars)...`);
     const prepared = bindImportsToGlobals(req.code);
     const result = await esbuild.transform(prepared, {
       loader: "tsx",

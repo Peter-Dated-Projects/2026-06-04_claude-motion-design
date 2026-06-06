@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
-    "@remotion/player": "^4.0.471",
+    "@remotion/player": "^4.0.473",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-fs": "^2",
@@ -25,10 +25,12 @@
     "monaco-editor": "^0.55.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "remotion": "^4.0.471",
+    "remotion": "^4.0.473",
     "zustand": "^4.5.5"
   },
   "devDependencies": {
+    "@remotion/bundler": "^4.0.473",
+    "@remotion/renderer": "^4.0.473",
     "@tauri-apps/cli": "^2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

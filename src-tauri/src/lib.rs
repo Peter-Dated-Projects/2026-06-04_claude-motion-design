@@ -12,6 +12,7 @@ mod commands {
     pub mod claude;
     pub mod export;
     pub mod projects;
+    pub mod render_toolchain;
     pub mod zip;
 }
 
@@ -64,6 +65,9 @@ pub fn run() {
             commands::zip::export_project_zip,
             commands::zip::import_project_zip,
             commands::export::export_tsx,
+            commands::export::export_mp4,
+            commands::render_toolchain::render_toolchain_status,
+            commands::render_toolchain::install_render_toolchain,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

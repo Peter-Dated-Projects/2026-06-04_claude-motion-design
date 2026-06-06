@@ -1,11 +1,11 @@
-/* Custom pointer-driven split layout. Light theme matching the app's panel
-   chrome (the same palette the old .mosaic-light overrides used). */
+/* Custom pointer-driven split layout. Colors come from the theme tokens defined
+   in App.css so the chrome tracks the light/dark setting. */
 
 .split-layout {
   position: absolute;
   inset: 0;
   display: flex;
-  background: #f3f3f3;
+  background: var(--bg);
 }
 
 /* A parent split: two panes with a gutter between them. */
@@ -40,7 +40,7 @@
   min-width: 0;
   min-height: 0;
   margin: 1px;
-  background: #ffffff;
+  background: var(--surface);
 }
 
 .split-leaf__header {
@@ -49,9 +49,9 @@
   align-items: center;
   height: 30px;
   padding: 0 12px;
-  background: #f0f0f0;
-  border-bottom: 1px solid #d4d4d4;
-  color: #555;
+  background: var(--bg-chrome);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
   font-family: Inter, sans-serif;
   font-size: 12px;
   font-weight: 500;
@@ -86,6 +86,22 @@
   min-height: 0;
 }
 
+/* Persistent per-panel host: re-parented into a leaf body, it (and the panel
+   section portaled inside it) must fill the body. */
+.split-panel-host {
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.split-panel-host > * {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
 /* Draggable gutter. ~6px hit area with a thin visible line that strengthens on
    hover/active. */
 .split-gutter {
@@ -108,7 +124,7 @@
 .split-gutter::after {
   content: "";
   position: absolute;
-  background: #d4d4d4;
+  background: var(--border);
   transition: background 0.1s ease;
 }
 
@@ -130,7 +146,7 @@
 
 .split-gutter:hover::after,
 .split-gutter--active::after {
-  background: #1d4ed8;
+  background: var(--accent-strong);
 }
 
 .split-gutter--col:hover::after,
@@ -181,8 +197,8 @@
   position: fixed;
   z-index: 10000;
   pointer-events: none;
-  background: rgba(29, 78, 216, 0.15);
-  border: 2px solid #1d4ed8;
+  background: var(--accent-overlay);
+  border: 2px solid var(--accent-strong);
   border-radius: 2px;
   transition:
     left 0.08s ease,

@@ -40,12 +40,25 @@ function RenderLogPanel({ height }: RenderLogPanelProps) {
   const entries = useRenderLogStore((s) => s.entries);
   const clear = useRenderLogStore((s) => s.clear);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Whether the view is pinned to the bottom. Stays true while the user sits at the
+  // newest entry; flips false the moment they scroll up to read history. Only when
+  // pinned do we auto-follow new entries -- otherwise a streaming log (the worker now
+  // emits several lines per compile) would yank the user back down mid-read.
+  const pinnedRef = useRef(true);
 
-  // Auto-scroll to newest whenever the list grows.
+  // Auto-scroll to newest only when pinned to the bottom.
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
   }, [entries.length]);
+
+  // Re-pin when the user scrolls back to (near) the bottom; unpin once they scroll up.
+  // 8px slack absorbs sub-pixel rounding so being visually at the bottom counts as pinned.
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+  };
 
   return (
     <div
@@ -99,6 +112,7 @@ function RenderLogPanel({ height }: RenderLogPanelProps) {
 
       <div
         ref={scrollRef}
+        onScroll={onScroll}
         style={{
           flex: 1,
           minHeight: 0,

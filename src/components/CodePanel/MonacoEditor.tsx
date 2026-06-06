@@ -3,6 +3,7 @@ import * as monaco from "monaco-editor";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import { useMonaco, type CodeEditor } from "../../hooks/useMonaco";
+import { useThemeStore } from "../../store/themeStore";
 
 // Offline-first: @monaco-editor/react fetches the Monaco runtime from a CDN by
 // default, which fails in the packaged desktop app (no network). Point the
@@ -64,6 +65,10 @@ function MonacoEditor({
   onLineCountChange,
 }: MonacoEditorProps) {
   const { handleMount } = useMonaco({ editorRef, onCodeChange, onLineCountChange });
+  // Track the app theme so the editor matches the surrounding chrome. Monaco
+  // ships `vs` (light) and `vs-dark`; @monaco-editor/react re-applies on prop
+  // change, so flipping this re-skins the open editor without a remount.
+  const theme = useThemeStore((s) => s.theme);
 
   return (
     <div className="monaco-host">
@@ -71,7 +76,7 @@ function MonacoEditor({
         language={languageForPath(path)}
         path={path}
         value={value}
-        theme="vs"
+        theme={theme === "dark" ? "vs-dark" : "vs"}
         onMount={handleMount}
         options={{ ...EDITOR_OPTIONS, readOnly }}
         loading={<div className="monaco-host__loading">Loading editor...</div>}

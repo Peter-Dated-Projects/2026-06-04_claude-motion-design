@@ -1,6 +1,7 @@
 /* CodePanel: a VS Code-style layout -- a left file-tree rail next to the editor
    area (tabs row stacked over the Monaco body). The base .panel is a flex row;
-   the code panel fills it with its own two-column layout. */
+   the code panel fills it with its own two-column layout. Colors come from the
+   theme tokens defined in App.css. */
 .panel--code {
   flex-direction: column;
 }
@@ -17,8 +18,8 @@
   flex: 0 0 180px;
   width: 180px;
   overflow: auto;
-  background: #f7f7f7;
-  border-right: 1px solid #e0e0e0;
+  background: var(--surface-alt);
+  border-right: 1px solid var(--border-soft);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   user-select: none;
@@ -29,14 +30,14 @@
   align-items: center;
   justify-content: space-between;
   padding: 6px 10px;
-  color: #888;
+  color: var(--text-muted);
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  border-bottom: 1px solid #e6e6e6;
+  border-bottom: 1px solid var(--border-soft);
   position: sticky;
   top: 0;
-  background: #f7f7f7;
+  background: var(--surface-alt);
 }
 
 /* Collapse arrow seated on the right of the FILES header. When the rail is
@@ -46,7 +47,7 @@
   appearance: none;
   border: none;
   background: transparent;
-  color: #888;
+  color: var(--text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
   line-height: 1;
@@ -55,7 +56,7 @@
 }
 
 .filetree__collapse:hover {
-  color: #333;
+  color: var(--text);
 }
 
 /* When showing assets the rail is a touch wider so thumbnails breathe. */
@@ -74,7 +75,7 @@
   appearance: none;
   border: none;
   background: transparent;
-  color: #888;
+  color: var(--text-muted);
   font-family: inherit;
   font-size: 10px;
   text-transform: uppercase;
@@ -85,23 +86,23 @@
 }
 
 .filetree__view:hover {
-  color: #333;
-  background: #ececec;
+  color: var(--text);
+  background: var(--hover-soft);
 }
 
 .filetree__view--active {
-  color: #1d4ed8;
-  background: #dbeafe;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
 }
 
 .filetree__view--active:hover {
-  background: #cfe0fb;
-  color: #1d4ed8;
+  background: var(--accent-soft-hover);
+  color: var(--accent-strong);
 }
 
 .filetree__empty {
   padding: 10px;
-  color: #999;
+  color: var(--text-faint);
   font-size: 11px;
 }
 
@@ -118,15 +119,15 @@
   margin: 8px;
   padding: 6px 8px;
   border-radius: 4px;
-  background: #fde8e8;
-  border: 1px solid #f5c2c2;
-  color: #9b1c1c;
+  background: var(--assets-error-bg);
+  border: 1px solid var(--assets-error-border);
+  color: var(--assets-error-text);
   font-size: 11px;
 }
 
 .assets__empty {
   padding: 16px 12px;
-  color: #999;
+  color: var(--text-faint);
   font-size: 11px;
   line-height: 1.5;
   text-align: center;
@@ -154,10 +155,10 @@
   justify-content: center;
   aspect-ratio: 1 / 1;
   background:
-    linear-gradient(45deg, #efefef 25%, transparent 25%) 0 0/12px 12px,
-    linear-gradient(-45deg, #efefef 25%, transparent 25%) 0 0/12px 12px,
-    #fafafa;
-  border: 1px solid #e0e0e0;
+    linear-gradient(45deg, var(--checker) 25%, transparent 25%) 0 0/12px 12px,
+    linear-gradient(-45deg, var(--checker) 25%, transparent 25%) 0 0/12px 12px,
+    var(--checker-bg);
+  border: 1px solid var(--border-soft);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -170,7 +171,7 @@
 
 .assets__name {
   font-size: 10px;
-  color: #555;
+  color: var(--text-secondary);
   text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -180,15 +181,15 @@
 .assets__hint {
   margin-top: auto;
   padding: 6px 10px;
-  color: #999;
+  color: var(--text-faint);
   font-size: 10px;
   text-align: center;
-  border-top: 1px solid #ececec;
+  border-top: 1px solid var(--border-soft);
 }
 
 /* Drop affordance overlay while a drag is hovering the assets rail. */
 .assets--dragover {
-  outline: 2px dashed #3b82f6;
+  outline: 2px dashed var(--accent);
   outline-offset: -4px;
 }
 
@@ -200,8 +201,8 @@
   justify-content: center;
   padding: 12px;
   text-align: center;
-  background: rgba(219, 234, 254, 0.85);
-  color: #1d4ed8;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
   font-size: 12px;
   font-weight: 600;
   pointer-events: none;
@@ -222,7 +223,7 @@
   appearance: none;
   border: none;
   background: transparent;
-  color: #3a3a3a;
+  color: var(--text);
   text-align: left;
   padding: 3px 8px;
   font: inherit;
@@ -231,27 +232,27 @@
 }
 
 .filetree__row:hover {
-  background: #ececec;
+  background: var(--hover-soft);
 }
 
 .filetree__row--active {
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
 
 .filetree__row--active:hover {
-  background: #cfe0fb;
+  background: var(--accent-soft-hover);
 }
 
 .filetree__chevron {
   display: inline-block;
   width: 10px;
-  color: #888;
+  color: var(--text-muted);
   font-size: 10px;
 }
 
 .filetree__row--dir .filetree__name {
-  color: #2a2a2a;
+  color: var(--text);
 }
 
 .filetree__name {
@@ -263,8 +264,8 @@
   margin-left: auto;
   padding: 0 5px;
   border-radius: 8px;
-  background: #dcedc8;
-  color: #558b2f;
+  background: var(--badge-bg);
+  color: var(--badge-text);
   font-size: 9px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -283,17 +284,17 @@
   display: flex;
   align-items: stretch;
   flex: 0 0 auto;
-  background: #ececec;
-  border-bottom: 1px solid #e0e0e0;
+  background: var(--tabs-bg);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 /* Toggle for the file-tree rail, pinned to the left of the tabs row. */
 .codepanel__tree-toggle {
   appearance: none;
   border: none;
-  border-right: 1px solid #e0e0e0;
+  border-right: 1px solid var(--border-soft);
   background: transparent;
-  color: #777;
+  color: var(--text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   line-height: 1;
@@ -303,8 +304,8 @@
 }
 
 .codepanel__tree-toggle:hover {
-  background: #e0e0e0;
-  color: #333;
+  background: var(--hover);
+  color: var(--text);
 }
 
 .codetabs__scroll {
@@ -320,9 +321,9 @@
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  background: #e4e4e4;
-  border-right: 1px solid #d4d4d4;
-  color: #777;
+  background: var(--tab-inactive-bg);
+  border-right: 1px solid var(--border);
+  color: var(--text-muted);
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   cursor: pointer;
@@ -331,13 +332,13 @@
 }
 
 .codetab:hover {
-  background: #ededed;
+  background: var(--hover-soft);
 }
 
 .codetab--active {
-  background: #ffffff;
-  color: #1f1f1f;
-  border-top-color: #3b82f6;
+  background: var(--surface);
+  color: var(--text);
+  border-top-color: var(--accent);
 }
 
 .codetab__name {
@@ -349,7 +350,7 @@
   appearance: none;
   border: none;
   background: transparent;
-  color: #999;
+  color: var(--text-faint);
   font-size: 13px;
   line-height: 1;
   padding: 0 2px;
@@ -358,15 +359,15 @@
 }
 
 .codetab__close:hover {
-  background: #d0d0d0;
-  color: #333;
+  background: var(--hover);
+  color: var(--text);
 }
 
 .codepanel__copy {
   appearance: none;
-  border: 1px solid #cfcfcf;
-  background: #ffffff;
-  color: #333;
+  border: 1px solid var(--border-input);
+  background: var(--surface);
+  color: var(--text);
   font-size: 11px;
   margin: 4px 8px;
   padding: 3px 10px;
@@ -378,8 +379,8 @@
 }
 
 .codepanel__copy:hover:not(:disabled) {
-  background: #e8e8e8;
-  border-color: #bdbdbd;
+  background: var(--hover);
+  border-color: var(--border);
 }
 
 .codepanel__copy:disabled {
@@ -392,7 +393,7 @@
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
-  background: #ffffff;
+  background: var(--surface);
 }
 
 .codepanel__placeholder {
@@ -401,7 +402,7 @@
   justify-content: center;
   width: 100%;
   height: 100%;
-  color: #999;
+  color: var(--text-faint);
   font-size: 13px;
 }
 
@@ -412,9 +413,9 @@
   z-index: 3;
   padding: 4px 10px;
   border-radius: 4px;
-  background: rgba(255, 248, 225, 0.96);
-  border: 1px solid #e6d28a;
-  color: #8a6d1b;
+  background: var(--hint-bg);
+  border: 1px solid var(--hint-border);
+  color: var(--hint-text);
   font-size: 11px;
   font-family: Inter, sans-serif;
   pointer-events: none;
@@ -431,7 +432,7 @@
   justify-content: center;
   width: 100%;
   height: 100%;
-  color: #999;
+  color: var(--text-faint);
   font-size: 13px;
 }
 
@@ -442,6 +443,6 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: rgba(148, 163, 184, 0.25);
+  background: var(--overlay-veil);
   z-index: 2;
 }

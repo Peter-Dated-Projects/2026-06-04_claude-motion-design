@@ -31,12 +31,34 @@ Canvas is 1080x1920. Keep ALL text, logos, and key visuals inside the safe zone:
 - Optical center sits slightly above true center: center hero blocks around y~820-900, not y=960.
 
 ================================================================
-3. DEFAULT LOOK (use unless the request implies otherwise)
+3. INTENT FIRST (establish before touching code)
+================================================================
+Before picking palette, font, or motion preset, answer three questions:
+
+EMOTION -- what should the viewer feel?
+  joy        : curved upward arcs, ease-out-back,    200-400ms, 10-20% overshoot
+  calm       : gentle curves,      ease-in-out sine, 500-800ms, 0% overshoot; long holds
+  urgency    : straight direct,    ease-out,         100-200ms, 0% overshoot; short holds
+  elegance   : long smooth arcs,   standard bezier,  400-700ms, 0% overshoot
+  surprise   : radial outward,     ease-out-expo,    150-300ms, 15-25% overshoot
+  playfulness: arcs + slight bounce, ease-out-back,  200-350ms, 10-20% overshoot
+
+PERSONALITY -- which archetype governs this clip?
+  Playful   : bouncy, 150-300ms  -> emphasis-pop + quick-tick; 10-20% overshoot ok
+  Premium   : elegant, 350-600ms -> smooth-settle only; 0% overshoot; slower holds
+  Corporate : clean, 200-400ms   -> snappy-entrance; 0-3% overshoot max
+  Energetic : bold, 100-250ms    -> snappy-entrance + heavy-drop; 15-30% overshoot ok
+
+NARRATIVE -- what is the micro-story?
+  Setup (establish who/what, first ~15%) -> Action (the main point, ~65%) -> Resolution (CTA / sign-off, last ~20%)
+
+================================================================
+4. DEFAULT LOOK (use unless the request implies otherwise)
 ================================================================
 Palette "Midnight Pop" (P1). Font stack "Bold Impact" (#2) for the hook, "Neutral Modern" (#1) for body. Template "Kinetic Staggered Headline" over an "Ambient Background" base. Motion: "snappy-entrance" in, "gentle-float" on hold, "soft-exit" out. A bare prompt ("animate FINKS") must still land on this coherent look.
 
 ================================================================
-4. COLOR PALETTES (pick EXACTLY ONE; do not introduce colors outside its roles)
+5. COLOR PALETTES (pick EXACTLY ONE; do not introduce colors outside its roles)
 ================================================================
 Roles: bg (full frame) | surface (card/panel behind text) | accent (the ONE loud color) | accent-soft (muted tint for fills) | ink (primary text, highest contrast) | muted (secondary text/hairlines).
 
@@ -62,7 +84,7 @@ Palette rules:
 - Over any non-flat background (gradient/footage), put text on a surface panel or scrim (rgba(0,0,0,0.45)) and add textShadow: '0 2px 12px rgba(0,0,0,0.5)'.
 
 ================================================================
-5. TYPE + FONT STACKS (pick ONE primary; at most two families total)
+6. TYPE + FONT STACKS (pick ONE primary; at most two families total)
 ================================================================
 Font stacks (system / web-safe ONLY; -apple-system / BlinkMacSystemFont always lead a sans stack):
   #1 Neutral Modern (safe default): -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif
@@ -86,7 +108,7 @@ Type rules:
 - Measure: break hero lines manually into 2-3 short stacked lines (14-26 chars for Display/Headline, ~40 max for Body).
 
 ================================================================
-6. SPACING + LAYOUT
+7. SPACING + LAYOUT
 ================================================================
 Spacing scale (8px base; snap gaps/padding to it): 4, 8, 16, 24, 32, 48, 64, 96, 128.
 - Content column: x 80-920 (840px wide), single column, centered or left-aligned. Vertical video is a one-column medium -- resist multi-column text.
@@ -94,8 +116,15 @@ Spacing scale (8px base; snap gaps/padding to it): 4, 8, 16, 24, 32, 48, 64, 96,
 - One alignment per block (all centered OR all left). Generous whitespace reads premium; cramped reads amateur.
 - Exactly one hero per scene: the biggest/boldest/brightest element. Step the scale (Display over Body = 150 vs 42), never two near sizes (60 vs 64 looks like a mistake).
 
+Surface depth -- shadow implies elevation; use at most ONE elevated layer per scene:
+  Flat (recedes)    : no shadow
+  Raised card       : box-shadow: 0 2px 8px rgba(0,0,0,0.18)
+  Hero card         : box-shadow: 0 8px 24px rgba(0,0,0,0.28)
+  Floating panel    : box-shadow: 0 16px 32px rgba(0,0,0,0.36)
+  Hard-shadow style : box-shadow: 4px 4px 0 #000  (no blur; neobrutalism/bold aesthetic)
+
 ================================================================
-7. MOTION PRESETS (reference by name; don't hand-tune springs unless asked)
+8. MOTION PRESETS (reference by name; don't hand-tune springs unless asked)
 ================================================================
 All numbers assume fps 30; scale frame counts by fps/30 if the author raises fps. Spring overshoot is set by the damping ratio zeta = damping / (2*sqrt(stiffness*mass)): zeta<1 bounces, zeta=1 arrives with no overshoot.
 
@@ -122,9 +151,19 @@ soft-exit -- leave faster than you entered, accelerating out (ease-IN), start ~1
   const exitOpacity = interpolate(frame, [exitStart, durationInFrames], [1, 0], { extrapolateLeft:'clamp', extrapolateRight:'clamp', easing: Easing.in(Easing.cubic) });
   const exitY      = interpolate(frame, [exitStart, durationInFrames], [0, -30], { extrapolateLeft:'clamp', extrapolateRight:'clamp', easing: Easing.in(Easing.cubic) });
 
+Per-element staggered exits (multi-element scenes -- reverse the entrance order):
+  const exitDelay  = (ITEMS.length - 1 - index) * 3;  // last element exits first
+  const exitStart  = durationInFrames - 18;
+  const exitO = interpolate(frame, [exitStart + exitDelay, exitStart + exitDelay + 10], [1, 0], { extrapolateLeft:'clamp', extrapolateRight:'clamp', easing: Easing.in(Easing.cubic) });
+
 gentle-float -- keep the hero alive during the hold (NOT a spring; keep amplitude tiny):
   const floatY  = Math.sin((frame / fps) * Math.PI * 2 * 0.35) * 10;   // 0.35Hz, +/-10px
   const breathe = 1 + Math.sin((frame / fps) * Math.PI * 2 * 0.25) * 0.02; // +/-2% scale
+
+gentle-float de-sync -- when 2+ elements float simultaneously, use different Hz values to prevent phase-lock:
+  Element 1: Math.sin((frame / fps) * Math.PI * 2 * 0.30) * 10   // 0.30Hz, ±10px
+  Element 2: Math.sin((frame / fps) * Math.PI * 2 * 0.22) * 8    // 0.22Hz, ±8px
+  Element 3: Math.sin((frame / fps) * Math.PI * 2 * 0.38) * 12   // 0.38Hz, ±12px
 
 Easing curves (drop-in for interpolate `easing`): entrances ease-OUT, exits ease-IN, on-screen moves ease-IN-OUT.
   decelerate = Easing.bezier(0.0, 0.0, 0.2, 1.0);  // entering
@@ -133,10 +172,43 @@ Easing curves (drop-in for interpolate `easing`): entrances ease-OUT, exits ease
 
 Timing budget for a 3-5s clip (90-150 frames @30fps):
   Enter: first 12-20% (each entrance 12-18f, cap ~20f, staggered). Hold/read: middle 55-70% (still or gentle-float; >= ~0.5s reading per ~7 words). Exit: last 10-15% (8-14f, faster than entrance).
-Stagger step 3-5 frames per item -- the single biggest "looks designed vs amateur" lever. Overlap entrances; establish the hero first, supporting elements after with calmer presets. For travel, drive x and y with different ranges so the path arcs.
+Stagger step 3-5 frames per item -- the single biggest "looks designed vs amateur" lever. Overlap entrances; establish the hero first, supporting elements after with calmer presets.
+
+Disney principles (apply deliberately, not mechanically):
+  Arcs          : Drive x and y with different interpolate ranges so the path curves. Add 10-20px perpendicular offset at the midpoint of major travel. 5px for premium/corporate; 20px+ for playful.
+  Anticipation  : Before a major entrance, displace the element 5-10px in the OPPOSITE direction for 4-6 frames (10-20% of main travel magnitude). Skip for premium.
+                  interpolate(frame, [0, 5, 22], [startY + 8, startY + 8, endY])
+  Squash+stretch: On impact (2-4f): scale to [scaleX:1.2, scaleY:0.85]; overshoot to [0.92, 1.1]; settle at [1,1]. Volume-preserving (width up = height down). Playful/Energetic only -- never premium.
+  Follow-through: Trailing elements delay 2-3f behind parent and stop 3-6f later. Use a calmer spring preset (smooth-settle) on trailing elements.
+  Secondary action: Support element moves at 30-50% of primary amplitude, starts 2-3f after primary, uses smooth-settle.
+
+1/3 Rules (choreography discipline):
+  - With 3+ animated elements, max 1/3 should be in active motion simultaneously. Let element 1 settle before element 3 starts.
+  - No element travels more than 1/3 of the canvas (360px) in one move without an intermediate keyframe (direction change, speed shift, or arc inflection).
+
+Clip-path reveals (editorial alternative to opacity fade for text entrances and panel wipes):
+  Text line reveal (top-down clip):
+    const lineH = 96; // match the element's rendered height in px
+    const clipH = interpolate(enter, [0, 1], [0, lineH]);
+    style={{ overflow:'hidden', clipPath:`inset(0 0 ${lineH - clipH}px 0)` }}
+  Panel wipe (bottom-up full-frame cover):
+    const clipY = interpolate(progress, [0, 1], [1920, 0], clamp);
+    style={{ clipPath:`inset(${clipY}px 0 0 0)` }}
+  Use clip-path for Display/Headline text for an editorial feel; use opacity fade for body text and ambient layers.
+
+Counter-motion (adds depth to hero entrance):
+  When the hero enters from one direction, move the ambient background blob/gradient in the OPPOSITE direction at 20-30% of the hero's speed.
+  Example: hero rises 40px -> background blob center drifts down 10-12px over the same frame range.
+
+Shimmer / gleam (hold-phase accent):
+  A gradient sweep across ONE accent word, stat, or CTA element during the hold. Use once per clip.
+  const shimmerX = interpolate(frame, [holdStart, holdStart + 24], [-120, elementWidth + 120], clamp);
+  style={{ background:`linear-gradient(90deg, transparent, rgba(255,255,255,0.28) 50%, transparent)`,
+           backgroundSize:`200px 100%`, backgroundRepeat:'no-repeat',
+           backgroundPosition:`${shimmerX}px 0` }}
 
 ================================================================
-8. TEMPLATES (start from one; assemble 3-4 into a finished clip)
+9. TEMPLATES (start from one; assemble 3-4 into a finished clip)
 ================================================================
   T1  Kinetic Staggered Headline -- opening hook; 2-6 words snap in word-by-word (default opener).
   T2  Big-Number / Stat Reveal   -- one metric counts up + scales with a label beneath.
@@ -145,14 +217,46 @@ Stagger step 3-5 frames per item -- the single biggest "looks designed vs amateu
   T5  Animated List Build        -- 3-5 short points building one at a time, staggered.
   T6  Quote Card                 -- testimonial: giant glyph, quote body, attribution.
   T7  Logo / Wordmark Reveal     -- sign-off: SVG ring-draw + wordmark settle.
-  T8  Section Transition / Wipe  -- full-frame panel covers then reveals; masks a cut.
+  T8  Section Transition / Wipe  -- full-frame panel covers then reveals; masks a cut. Use clip-path variant: clipPath:`inset(${progress * 100}% 0 0 0)` for a sharper editorial feel than opacity.
   T9  Progress Motif             -- bar/ring fills to imply process or "step N of M".
-  T10 Ambient Background         -- base layer: drifting CSS gradient + soft radial blobs (no assets).
+  T10 Ambient Background         -- base layer: drifting CSS gradient + soft radial blobs (no assets). Drive blob centers in the OPPOSITE direction from the hero entrance for the first 20f (counter-motion).
+  T11 Shimmer Highlight          -- gradient sweep across ONE accent element during the hold phase (see Section 8 Shimmer).
 
 Assemble with Sequence / Series over an Ambient Background base. Default skeleton: ambient (T10) base -> hook (T1 or T4) -> substance (T2/T5/T6/T9) -> sign-off (T3 or T7), wipe (T8) only for a hard tonal cut. 3-4 templates over 3-5s; more feels frantic. When stacking templates over T10, set inner backgrounds to transparent so the base shows through (one background source of truth per clip).
 
 ================================================================
-9. EXEMPLAR (this is what "good" looks like -- the default look, complete and compiling)
+10. COMPONENT VOCABULARY (built-in knowledge -- use when shared files exist in the project)
+================================================================
+If the project contains shared modules, ALWAYS import from them instead of rewriting inline. Check for: theme.ts, motion.ts, components/ directory.
+
+theme.ts
+  import { P, DISPLAY, BODY } from './theme';
+  P: { bg, surface, accent, accentSoft, ink, muted }  // active palette tokens
+  DISPLAY: string   // Bold Impact font stack
+  BODY: string      // Neutral Modern font stack
+
+motion.ts
+  import { SNAPPY, SMOOTH_SETTLE, EMPHASIS_POP, HEAVY_DROP, QUICK_TICK, fadeIn, softExit, gentleFloat } from './motion';
+  SNAPPY / SMOOTH_SETTLE / EMPHASIS_POP / HEAVY_DROP / QUICK_TICK: SpringConfig  // named presets from Section 8
+  fadeIn(frame, startFrame, dur) -> opacity number
+  softExit({ frame, durationInFrames }) -> { opacity: number, translateY: number }
+  gentleFloat(frame, fps) -> translateY number
+
+components/
+  import { AnimatedWord } from './components/AnimatedWord';   // word, frame, fps, delay?, color?, fontSize?
+  import { StatCounter }  from './components/StatCounter';    // value, label, frame, fps, prefix?, suffix?
+  import { LowerThird }   from './components/LowerThird';     // name, title, frame, fps, barColor?
+  import { TitleCard }    from './components/TitleCard';      // kicker, title, subtitle?, frame, fps
+  import { ListBuild }    from './components/ListBuild';      // items: string[], frame, fps
+  import { GradientBg }   from './components/GradientBg';     // frame, fps, color?
+  import { ProgressBar }  from './components/ProgressBar';    // value (0..1), frame, fps, label?, color?
+  import { QuoteCard }    from './components/QuoteCard';      // quote, attribution, frame, fps
+
+PREFER-EXISTING RULE: check this list before writing any animation element inline. If a component fits, import it. Only write inline if no existing component applies.
+When you create a new reusable component, add it to components/ as a named export. When you create a new spring config, add it to motion.ts. Then import from animation.tsx.
+
+================================================================
+11. EXEMPLAR (this is what "good" looks like -- the default look, complete and compiling)
 ================================================================
 import React from "react";
 import { AbsoluteFill, useCurrentFrame, useVideoConfig, spring, interpolate, Easing } from "remotion";
@@ -171,7 +275,7 @@ const MotionThatMoves: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
 
-  // Ambient base: a slow radial blob drift (subtle; never competes with text).
+  // Ambient base: two de-synced radial blobs with counter-motion on x axis.
   const bx = 540 + Math.sin(frame / 45) * 200;
   const by = 760 + Math.cos(frame / 55) * 220;
 
@@ -213,7 +317,7 @@ const MotionThatMoves: React.FC = () => {
 export default MotionThatMoves;
 
 ================================================================
-10. ANTI-PATTERNS (NEVER do the left -- do the right instead)
+12. ANTI-PATTERNS (NEVER do the left -- do the right instead)
 ================================================================
 - NEVER animate every element on the same frame -> stagger entrances 3-5 frames per element, hero first.
 - NEVER use linear easing on entrances/exits -> use a spring preset or an eased curve (ease-out in, ease-in out).
@@ -230,9 +334,12 @@ export default MotionThatMoves;
 - NEVER leave Display type at default tracking -> apply -1% to -2% letter-spacing and tight line-height.
 - NEVER center everything huge with no hierarchy -> one hero, step the type scale, demote the rest.
 - NEVER hardcode fps/duration numbers in the component body -> read via useVideoConfig(); scale frame counts by fps/30.
+- NEVER float 2+ elements at the same Hz -> de-sync frequencies (0.22, 0.30, 0.38) so they never phase-lock.
+- NEVER travel a hero element more than 360px in a straight line -> add an arc (perpendicular offset 10-20px at midpoint) or break the move with an intermediate keyframe.
+- NEVER start all animated elements simultaneously with no priority -> max 1/3 in motion at once; hero settles before supporting elements begin.
 
 ================================================================
-11. PRE-FINISH SELF-CHECK (verify ALL before you stop; fix any failure first)
+13. PRE-FINISH SELF-CHECK (verify ALL before you stop; fix any failure first)
 ================================================================
 [ ] All text and key visuals inside the safe zone (x 80-920, y 200-1500); nothing critical in the bottom 370px.
 [ ] Exactly one palette used; text/background contrast clearly legible (ink on bg for body).
@@ -242,3 +349,9 @@ export default MotionThatMoves;
 [ ] A hold phase the eye can read (55-70% of the clip), with gentle-float if the hero would otherwise sit dead.
 [ ] fps/durationInFrames exports present and sane for the clip's pacing; no fps/duration numbers hardcoded in the body.
 [ ] Imports limited to react / react-dom / remotion / @remotion/player; no external assets or fonts.
+[ ] Emotional intent (Section 3) is coherent with palette, personality, and motion choices.
+[ ] Hero enters before supporting elements; max 1/3 of elements in active motion simultaneously.
+[ ] Major travel paths arc (different x/y interpolate ranges); no flat horizontal or vertical slab moves for key elements.
+[ ] Counter-motion applied: ambient layer moves opposite to hero direction during entrance.
+[ ] If 2+ elements float: their Hz values are de-synced.
+[ ] If shared modules (theme.ts, motion.ts, components/) exist: imports come from them, not rewritten inline.

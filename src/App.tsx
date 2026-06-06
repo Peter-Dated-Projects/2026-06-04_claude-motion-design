@@ -15,6 +15,7 @@ import CodePanel, { ENTRY_FILE } from "./components/CodePanel/CodePanel";
 import PreviewPanel from "./components/PreviewPanel/PreviewPanel";
 import Onboarding, { type OnboardingPhase } from "./components/Onboarding";
 import Settings from "./components/Settings";
+import { ChevronDownIcon, CheckIcon } from "./components/icons";
 import { useProjectStore } from "./store/projectStore";
 import { useUIStore } from "./store/uiStore";
 import type { ProjectFile } from "./types";
@@ -228,7 +229,8 @@ function PanelsControls({
         aria-haspopup="true"
         aria-expanded={open}
       >
-        Panels <span className="panels-controls__caret">v</span>
+        Panels
+        <ChevronDownIcon className="panels-controls__caret" />
       </button>
       <button
         type="button"
@@ -255,7 +257,9 @@ function PanelsControls({
                 title={lockLast ? "Can't hide the last panel" : undefined}
                 onClick={() => onToggle(id)}
               >
-                <span className="panels-controls__check">{shown ? "x" : ""}</span>
+                <span className="panels-controls__check">
+                  {shown && <CheckIcon />}
+                </span>
                 {PANEL_TITLES[id]}
               </button>
             );

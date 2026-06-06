@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useProjectStore } from "../../store/projectStore";
 import ProjectMenu from "./ProjectMenu";
 import ExportMenu from "./ExportMenu";
+import { ChevronDownIcon, GearIcon } from "../icons";
 
 // Top toolbar: project selector | + New | Export / Project menus | settings gear.
 // State for the active project and the project list comes from the project store;
@@ -84,9 +85,7 @@ function Toolbar({ onOpenSettings, onNewProject }: ToolbarProps) {
             onClick={() => setOpen((v) => !v)}
           >
             {activeProject?.name ?? "No project"}
-            <span className="toolbar__caret" aria-hidden="true">
-              ▾
-            </span>
+            <ChevronDownIcon className="toolbar__caret" />
           </button>
           {open && (
             <div style={DROPDOWN} role="menu">
@@ -121,7 +120,7 @@ function Toolbar({ onOpenSettings, onNewProject }: ToolbarProps) {
           aria-label="Settings"
           onClick={onOpenSettings}
         >
-          ⚙
+          <GearIcon />
         </button>
       </div>
     </header>

@@ -32,3 +32,9 @@ portable-pty = "0.8"
 # Watches the project's animation.tsx so the editor/preview track what Claude
 # writes in the terminal.
 notify = "6"
+# Downloading + verifying + unpacking the MP4-render toolchain on first render
+# (render_toolchain.rs). rustls so we don't depend on a system OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "stream"] }
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"

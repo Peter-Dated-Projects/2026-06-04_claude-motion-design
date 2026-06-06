@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { appDataDir, join } from "@tauri-apps/api/path";
+import { useThemeStore, type Theme } from "../store/themeStore";
+import { SunIcon, MoonIcon, CloseIcon } from "./icons";
 
 // Settings panel (gear icon). Read-only diagnostics about the local Claude setup:
 // CLI availability, the Remotion docs MCP, the bundled skills prompt path, and the
@@ -35,12 +37,12 @@ const OVERLAY: React.CSSProperties = {
 const CARD: React.CSSProperties = {
   width: 520,
   maxWidth: "92vw",
-  background: "#ffffff",
-  border: "1px solid #d4d4d4",
+  background: "var(--elevated)",
+  border: "1px solid var(--border)",
   borderRadius: 10,
   padding: 24,
-  boxShadow: "0 24px 80px rgba(0,0,0,0.25)",
-  color: "#1f1f1f",
+  boxShadow: "0 24px 80px var(--shadow)",
+  color: "var(--text)",
 };
 
 const HEADER: React.CSSProperties = {
@@ -55,19 +57,19 @@ const ROW: React.CSSProperties = {
   flexDirection: "column",
   gap: 4,
   padding: "12px 0",
-  borderTop: "1px solid #e0e0e0",
+  borderTop: "1px solid var(--border-soft)",
 };
 
 const LABEL: React.CSSProperties = {
   fontSize: 12,
-  color: "#888",
+  color: "var(--text-muted)",
   textTransform: "uppercase",
   letterSpacing: "0.04em",
 };
 
 const VALUE: React.CSSProperties = {
   fontSize: 13,
-  color: "#1f1f1f",
+  color: "var(--text)",
   fontFamily: "ui-monospace, monospace",
   wordBreak: "break-all",
 };
@@ -84,21 +86,22 @@ function dot(ok: boolean): React.CSSProperties {
 }
 
 const CLOSE_BTN: React.CSSProperties = {
-  background: "#ffffff",
-  color: "#1f1f1f",
-  border: "1px solid #cfcfcf",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: "var(--surface)",
+  color: "var(--text-secondary)",
+  border: "1px solid var(--border-input)",
   borderRadius: 6,
   width: 28,
   height: 28,
-  fontSize: 16,
-  lineHeight: 1,
   cursor: "pointer",
 };
 
 const REFRESH_BTN: React.CSSProperties = {
   background: "transparent",
-  color: "#3b82f6",
-  border: "1px solid #cfcfcf",
+  color: "var(--accent)",
+  border: "1px solid var(--border-input)",
   borderRadius: 5,
   padding: "2px 8px",
   fontSize: 11,
@@ -108,9 +111,9 @@ const REFRESH_BTN: React.CSSProperties = {
 
 const PATH_INPUT: React.CSSProperties = {
   flex: 1,
-  background: "#ffffff",
-  color: "#1f1f1f",
-  border: "1px solid #cfcfcf",
+  background: "var(--surface)",
+  color: "var(--text)",
+  border: "1px solid var(--border-input)",
   borderRadius: 5,
   padding: "5px 8px",
   fontSize: 12,
@@ -118,9 +121,9 @@ const PATH_INPUT: React.CSSProperties = {
 };
 
 const SMALL_BTN: React.CSSProperties = {
-  background: "#ffffff",
-  color: "#1f1f1f",
-  border: "1px solid #cfcfcf",
+  background: "var(--surface)",
+  color: "var(--text)",
+  border: "1px solid var(--border-input)",
   borderRadius: 5,
   padding: "5px 10px",
   fontSize: 12,
@@ -128,7 +131,37 @@ const SMALL_BTN: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+// Appearance toggle (Light / Dark segmented control).
+const SEG_WRAP: React.CSSProperties = {
+  display: "inline-flex",
+  gap: 4,
+  padding: 3,
+  background: "var(--surface)",
+  border: "1px solid var(--border-input)",
+  borderRadius: 8,
+  marginTop: 4,
+  alignSelf: "flex-start",
+};
+
+function segBtn(active: boolean): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "5px 12px",
+    fontSize: 12,
+    fontWeight: active ? 600 : 400,
+    border: "none",
+    borderRadius: 5,
+    cursor: "pointer",
+    background: active ? "var(--accent-soft)" : "transparent",
+    color: active ? "var(--accent-strong)" : "var(--text-secondary)",
+  };
+}
+
 function Settings({ open, onClose }: SettingsProps) {
+  const theme = useThemeStore((s) => s.theme);
+  const setTheme = useThemeStore((s) => s.setTheme);
   const [cli, setCli] = useState<ClaudeCliInfo | null>(null);
   const [overrideInput, setOverrideInput] = useState("");
   const [checking, setChecking] = useState(false);
@@ -223,11 +256,30 @@ function Settings({ open, onClose }: SettingsProps) {
         <div style={HEADER}>
           <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>Settings</h2>
           <button type="button" style={CLOSE_BTN} aria-label="Close settings" onClick={onClose}>
-            x
+            <CloseIcon />
           </button>
         </div>
 
         <div style={{ ...ROW, borderTop: "none", paddingTop: 0 }}>
+          <span style={LABEL}>Appearance</span>
+          <div style={SEG_WRAP} role="radiogroup" aria-label="Theme">
+            {(["light", "dark"] as Theme[]).map((t) => (
+              <button
+                key={t}
+                type="button"
+                role="radio"
+                aria-checked={theme === t}
+                style={segBtn(theme === t)}
+                onClick={() => setTheme(t)}
+              >
+                {t === "light" ? <SunIcon /> : <MoonIcon />}
+                {t === "light" ? "Light" : "Dark"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={ROW}>
           <span style={LABEL}>Claude CLI</span>
           <span style={VALUE}>
             <span style={dot(claudeOk)} />
@@ -247,7 +299,7 @@ function Settings({ open, onClose }: SettingsProps) {
           </span>
           <span style={{ ...LABEL, textTransform: "none", marginTop: 6 }}>
             Auto-detected (which claude):{" "}
-            <span style={{ fontFamily: "ui-monospace, monospace", color: "#555" }}>
+            <span style={{ fontFamily: "ui-monospace, monospace", color: "var(--text-secondary)" }}>
               {cli === null ? "..." : cli.detected ?? "not found on PATH"}
             </span>
           </span>
