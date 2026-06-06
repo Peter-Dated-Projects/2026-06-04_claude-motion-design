@@ -5,15 +5,19 @@ sequence. Four endpoints (exact contract in
 .charm/proposals/PROPOSAL-rotoscoping-microservice.md):
 
   GET    /health                        -> service + model + VRAM status
-  POST   /rotoscope                     -> run a job synchronously, return a ZIP
+  POST   /rotoscope                     -> launch a job, return 202 + job_id
   GET    /rotoscope/{job_id}/progress   -> SSE progress snapshots
+  GET    /rotoscope/{job_id}/result     -> the output ZIP once the job is done
   DELETE /rotoscope/{job_id}            -> cancel an in-flight job
 
 Design note: the job_id is CLIENT-SUPPLIED in the POST form so the client can
-open the progress SSE stream before the synchronous POST returns. The job is run
-in a thread (run_in_executor) so the event loop stays free to serve the SSE
-stream concurrently with the blocking GPU work. One GPU -> jobs are serialized
-by GPU_LOCK.
+open the progress SSE stream before POSTing. The POST validates, saves the
+upload, probes duration, then launches the segmentation as a background task and
+returns 202 immediately -- it does NOT hold the HTTP connection open for the
+multi-minute GPU job. Progress flows over the SSE stream; the result ZIP is
+fetched separately from /result. The blocking job body runs in a worker thread
+(asyncio.to_thread) so the event loop stays free; one GPU -> jobs are serialized
+by GPU_LOCK, so concurrent POSTs queue correctly.
 
 Entry point is `uv run main.py`. Refuses to start without CUDA (no CPU
 fallback). Developed on a Mac (no CUDA): GPU paths could not be executed here.
@@ -90,6 +94,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ClaudeMotion Rotoscoping", lifespan=lifespan)
 
+# Strong references to in-flight background job tasks. asyncio only holds a weak
+# reference to a bare create_task result, so without this the fire-and-forget
+# job task can be garbage-collected mid-flight. Tasks remove themselves on done.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
 
 # --- endpoints -------------------------------------------------------------
 
@@ -137,13 +146,58 @@ def _run_job_blocking(
         )
 
 
+def _finalize(
+    job: Job,
+    video_path: Path,
+    frames_dir: Path,
+    output_dir: Path,
+    points: list[dict],
+    frame_skip: int,
+) -> None:
+    """Run the whole job to completion in a worker thread.
+
+    Launched fire-and-forget from the POST (it has already returned 202). Owns
+    the job's terminal state and scratch lifecycle: on success it zips the
+    output, records `job.zip_path`, and leaves the work_dir in place for the
+    /result endpoint to serve and clean up. Every failure path sets a terminal
+    stage AND removes the work_dir so scratch never leaks.
+    """
+    work_dir = job.work_dir
+    try:
+        written = _run_job_blocking(
+            job, video_path, frames_dir, output_dir, points, frame_skip
+        )
+        if job.cancelled:
+            job.update(stage="cancelled")
+            if work_dir is not None:
+                shutil.rmtree(work_dir, ignore_errors=True)
+            return
+        zip_path = (work_dir or output_dir.parent) / "result.zip"
+        _zip_output(output_dir, zip_path)
+        job.zip_path = zip_path
+        job.update(stage="done", progress=1.0, frames_done=written)
+    except sam2_engine.RotoscopeCancelled:
+        job.update(stage="cancelled")
+        if work_dir is not None:
+            shutil.rmtree(work_dir, ignore_errors=True)
+    except sam2_engine.RotoscopeOOMError as exc:
+        job.update(stage="error", error=str(exc))
+        if work_dir is not None:
+            shutil.rmtree(work_dir, ignore_errors=True)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("rotoscope job %s failed", job.job_id)
+        job.update(stage="error", error=str(exc))
+        if work_dir is not None:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+
 @app.post("/rotoscope")
 async def rotoscope(
     video: UploadFile,
     points: str = Form(...),
     job_id: str = Form(...),
     frame_skip: int = Form(3),
-) -> FileResponse:
+) -> JSONResponse:
     # --- validate inputs ---
     if frame_skip < 0 or frame_skip > config.MAX_FRAME_SKIP:
         raise HTTPException(
@@ -168,30 +222,40 @@ async def rotoscope(
     output_dir = work_dir / "output"
     video_path = work_dir / (Path(video.filename or "input").name or "input.mp4")
 
-    def _cleanup() -> None:
-        registry.remove(job_id)
-        shutil.rmtree(work_dir, ignore_errors=True)
-
-    try:
-        # Persist the upload.
+    # Persist the upload and probe duration BEFORE returning: the UploadFile is
+    # closed once the response is sent. Both touch the disk / spawn ffprobe, so
+    # run them off the event loop.
+    def _save_upload() -> None:
         with video_path.open("wb") as out:
             shutil.copyfileobj(video.file, out)
 
+    try:
+        await asyncio.to_thread(_save_upload)
         # Enforce the clip-length cap (last line of defence; client caps too).
-        duration, _fps = ffmpeg_helper.probe_video(video_path)
-        if duration > config.MAX_VIDEO_SECONDS:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"video is {duration:.1f}s; max is "
-                    f"{config.MAX_VIDEO_SECONDS:.0f}s"
-                ),
-            )
+        duration, _fps = await asyncio.to_thread(ffmpeg_helper.probe_video, video_path)
+    except Exception as exc:
+        logger.exception("rotoscope job %s: failed to ingest upload", job_id)
+        job.update(stage="error", error=str(exc))
+        registry.remove(job_id)
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=f"could not read upload: {exc}")
 
-        loop = asyncio.get_running_loop()
-        written = await loop.run_in_executor(
-            None,
-            _run_job_blocking,
+    if duration > config.MAX_VIDEO_SECONDS:
+        job.update(stage="error", error="video too long")
+        registry.remove(job_id)
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"video is {duration:.1f}s; max is {config.MAX_VIDEO_SECONDS:.0f}s"
+            ),
+        )
+
+    # Launch the job in the background and return immediately. GPU_LOCK inside
+    # _run_job_blocking serializes GPU work, so concurrent POSTs queue.
+    task = asyncio.create_task(
+        asyncio.to_thread(
+            _finalize,
             job,
             video_path,
             frames_dir,
@@ -199,47 +263,23 @@ async def rotoscope(
             parsed_points,
             frame_skip,
         )
-
-        if job.cancelled:
-            job.update(stage="cancelled")
-            raise HTTPException(status_code=409, detail="job cancelled")
-
-        zip_path = work_dir / "result.zip"
-        _zip_output(output_dir, zip_path)
-        job.update(stage="done", progress=1.0, frames_done=written)
-
-        # FileResponse streams the zip, then BackgroundTask cleans up scratch.
-        return FileResponse(
-            zip_path,
-            media_type="application/zip",
-            filename=f"rotoscope_{Path(video_path.name).stem}.zip",
-            background=BackgroundTask(_cleanup),
-        )
-
-    except sam2_engine.RotoscopeCancelled:
-        job.update(stage="cancelled")
-        _cleanup()
-        raise HTTPException(status_code=409, detail="job cancelled")
-    except sam2_engine.RotoscopeOOMError as exc:
-        job.update(stage="error", error=str(exc))
-        _cleanup()
-        raise HTTPException(status_code=500, detail=str(exc))
-    except HTTPException:
-        job.update(stage="error", error="invalid request")
-        _cleanup()
-        raise
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("rotoscope job %s failed", job_id)
-        job.update(stage="error", error=str(exc))
-        _cleanup()
-        raise HTTPException(status_code=500, detail=f"rotoscope failed: {exc}")
+    )
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return JSONResponse(status_code=202, content={"job_id": job_id})
 
 
 @app.get("/rotoscope/{job_id}/progress")
 async def progress(job_id: str) -> StreamingResponse:
     async def event_stream():
         # Tolerate the client subscribing before the POST registers the job.
-        job = registry.wait_for_job(job_id, timeout=10.0)
+        # Poll without blocking the event loop (the old wait_for_job busy-wait
+        # froze the loop and starved the POST that would register the job).
+        deadline = asyncio.get_running_loop().time() + 10.0
+        job = registry.get(job_id)
+        while job is None and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.1)
+            job = registry.get(job_id)
         if job is None:
             payload = json.dumps({"stage": "error", "error": "job not found"})
             yield f"data: {payload}\n\n"
@@ -262,6 +302,43 @@ async def progress(job_id: str) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/rotoscope/{job_id}/result")
+async def result(job_id: str) -> FileResponse:
+    job = registry.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    snap = job.snapshot()
+    stage = snap["stage"]
+
+    if stage == "done":
+        if job.zip_path is None or not job.zip_path.exists():
+            raise HTTPException(status_code=500, detail="result missing")
+        work_dir = job.work_dir
+
+        def _cleanup() -> None:
+            registry.remove(job_id)
+            if work_dir is not None:
+                shutil.rmtree(work_dir, ignore_errors=True)
+
+        # FileResponse streams the zip, then BackgroundTask reaps job + scratch.
+        return FileResponse(
+            job.zip_path,
+            media_type="application/zip",
+            filename=f"rotoscope_{job_id}.zip",
+            background=BackgroundTask(_cleanup),
+        )
+
+    if stage == "error":
+        raise HTTPException(
+            status_code=500, detail=snap.get("error") or "rotoscope failed"
+        )
+    if stage == "cancelled":
+        raise HTTPException(status_code=409, detail="job cancelled")
+    # queued / extracting / segmenting / packaging -> not ready yet.
+    raise HTTPException(status_code=425, detail="job not finished")
 
 
 @app.delete("/rotoscope/{job_id}")

@@ -73,18 +73,23 @@ be unusably slow and is never intended).
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/health` | `{status, model, vram_used_gb, vram_total_gb}` -- polled for discovery |
-| POST | `/rotoscope` | multipart `{video, points, frame_skip, job_id}` -> ZIP of PNGs |
-| GET | `/rotoscope/{job_id}/progress` | SSE progress snapshots until `done`/`error` |
+| POST | `/rotoscope` | multipart `{video, points, frame_skip, job_id}` -> `202 {job_id}`; launches the job in the background |
+| GET | `/rotoscope/{job_id}/progress` | SSE progress snapshots until `done`/`error`/`cancelled` |
+| GET | `/rotoscope/{job_id}/result` | the output ZIP once `done` (`425` while running, `409` cancelled, `500` error, `404` unknown) |
 | DELETE | `/rotoscope/{job_id}` | cancel an in-flight job (200) |
 
 **`points`** is a JSON array of `{x, y, label}` where `label` is `1` for a
 foreground point and `0` for a background exclusion point. **`frame_skip`**
 controls output decimation (`0` = every frame, `3` = every 4th); capped at
 `MAX_FRAME_SKIP` (10). **`job_id`** is **client-supplied**: the client opens the
-progress SSE stream on that id before POSTing, because the POST runs the job
-synchronously and returns the ZIP, so a server-assigned id could not be
-subscribed to in time. The progress endpoint tolerates the race where it
-subscribes a moment before the POST registers the job.
+progress SSE stream on that id before POSTing. The POST validates, saves the
+upload, probes duration, then launches segmentation as a background task and
+returns `202` immediately -- it does **not** hold the connection open for the
+multi-minute GPU job. Progress flows over the SSE stream; once the job reaches
+`done`, the client fetches the ZIP from `/result` (which streams it, then reaps
+the job and its scratch dir). The progress endpoint tolerates the race where it
+subscribes a moment before the POST registers the job by polling without
+blocking the event loop.
 
 Output PNGs are named `frame_{idx+1:04d}.png` (1-based) for the frames where
 `frame_idx % (frame_skip + 1) == 0`. SAM2 propagates across *every* frame for
