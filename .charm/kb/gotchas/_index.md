@@ -4,6 +4,7 @@ Traps, flaky behavior, and non-obvious constraints -- the things that bite you t
 
 | Note | Summary | Status |
 |---|---|---|
+| [project-context-non-source-duplicated](project-context-non-source-duplicated.md) | The per-session project-context listing's exclusion list (CONTEXT_NON_SOURCE in claude_bridge.rs) is a hand-copy of projects.rs::NON_SOURCE; different modules, must stay in sync or Claude's file context and the editor tree disagree. Context file lives in the config dir (not project dir) so the watcher ignores it; uses plain fs::write, not write_if_changed. | current |
 | [rust-raw-string-hex-color-collision](rust-raw-string-hex-color-collision.md) | Seeding TS/CSS with hex colors via a Rust r#"..."# raw string breaks -- the sequence "# inside e.g. "#0B0E14" closes the delimiter early; use r##"..."## (extra hash). | current |
 | [skills-file-has-load-bearing-exemplar-tsx](skills-file-has-load-bearing-exemplar-tsx.md) | remotion-skills.txt now embeds a complete exemplar animation.tsx (the few-shot 'what good looks like' anchor); it must stay a compiling Remotion file or it teaches the model broken patterns -- verify by extracting the block and running tsc against the project's node_modules. | current |
 | [mosaic-drag-swallowed-by-iframe](mosaic-drag-swallowed-by-iframe.md) | react-mosaic tile drags snap back because the preview iframe / Monaco swallow the native HTML5 drag as the cursor crosses them; fix is pointer-events:none on .mosaic-window-body while a `panels--dragging` class is set. | current |

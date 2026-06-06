@@ -105,6 +105,20 @@ impl PtyBridge {
             cmd.arg("--append-system-prompt-file");
             cmd.arg(phase);
         }
+        // Best-effort per-session project file listing: tells Claude what source
+        // files actually exist so it imports real modules instead of inventing
+        // missing ones (a missing import breaks the preview). Append it as a
+        // further prompt file. Never abort `open` if generation fails — a session
+        // without the listing is strictly better than no session at all.
+        match claude_bridge::write_project_context(&app, &slug) {
+            Ok(context_file) => {
+                cmd.arg("--append-system-prompt-file");
+                cmd.arg(&context_file);
+            }
+            Err(e) => {
+                eprintln!("project-context generation failed, continuing without it: {e}");
+            }
+        }
         cmd.cwd(&project_dir);
         // Advertise a capable terminal so the CLI's interactive UI renders well.
         cmd.env("TERM", "xterm-256color");
