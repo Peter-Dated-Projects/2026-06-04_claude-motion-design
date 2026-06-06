@@ -34,6 +34,8 @@ const ROTO_HOST_KEY = "claude-motion:rotoHost";
 /** Source fps assumed for frame<->time conversion when the video is unprobed. */
 const ASSUMED_FPS = 30;
 
+const COMPARE_LAYOUT_KEY = "claude-motion:rotoCompareLayout";
+
 /**
  * Looping stop-motion playback of a loaded output's PNG sequence. Advances a
  * frame index on a timer at the sequence's effective fps and loops. Renders the
@@ -271,6 +273,15 @@ export default function RotoVideoPanel() {
   const [currentTime, setCurrentTime] = useState(0);
   const [showModal, setShowModal] = useState(false);
 
+  // Comparison mode state
+  const [comparisonActive, setComparisonActive] = useState(false);
+  const [compareLayout, setCompareLayout] = useState<"side-by-side" | "stacked">(() => {
+    const stored = localStorage.getItem(COMPARE_LAYOUT_KEY);
+    return stored === "stacked" ? "stacked" : "side-by-side";
+  });
+  const [comparisonFrame, setComparisonFrame] = useState(0);
+  const rafRef = useRef<number | null>(null);
+
   const fps = video?.fps ?? ASSUMED_FPS;
   const isJobRunning = phase === "uploading" || phase === "processing";
   const fgCount = points.filter((p) => p.label === 1).length;
@@ -290,6 +301,42 @@ export default function RotoVideoPanel() {
 
   const canGenerate =
     startFrame != null && fgCount > 0 && !isJobRunning && !!slug && !exceedsCap;
+
+  const canCompare = video != null && loadedSequence != null;
+
+  // Disable comparison if either side goes away.
+  useEffect(() => {
+    if (!canCompare) setComparisonActive(false);
+  }, [canCompare]);
+
+  // rAF loop: source video drives sequence frame in comparison mode.
+  useEffect(() => {
+    if (!comparisonActive || !loadedSequence) return;
+    const count = loadedSequence.urls.length;
+    const tick = () => {
+      const vid = playerRef.current;
+      if (vid) {
+        const frame = Math.min(
+          count - 1,
+          Math.max(0, Math.round(vid.currentTime * fps / (frameSkip + 1))),
+        );
+        setComparisonFrame(frame);
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    };
+  }, [comparisonActive, loadedSequence, fps, frameSkip]);
+
+  const toggleLayout = () => {
+    setCompareLayout((prev) => {
+      const next = prev === "side-by-side" ? "stacked" : "side-by-side";
+      localStorage.setItem(COMPARE_LAYOUT_KEY, next);
+      return next;
+    });
+  };
 
   const videoUrl = video ? convertFileSrc(video.path) : null;
 
@@ -373,9 +420,62 @@ export default function RotoVideoPanel() {
   return (
     <div className="roto-video">
       <style>{STYLES}</style>
-      <div className="roto-video__label">Video</div>
+      <div className="roto-video__label">
+        <span>Video</span>
+        <div className="roto-video__compare-toolbar">
+          {comparisonActive ? (
+            <button
+              type="button"
+              className="roto-video__layout-btn"
+              onClick={toggleLayout}
+              title={compareLayout === "side-by-side" ? "Switch to stacked" : "Switch to side-by-side"}
+            >
+              {compareLayout === "side-by-side" ? "Stack" : "Side"}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className={`roto-video__compare-btn${comparisonActive ? " roto-video__compare-btn--active" : ""}`}
+            disabled={!canCompare}
+            onClick={() => setComparisonActive((v) => !v)}
+            title={canCompare ? "Toggle source/output comparison" : "Load a source video and an output sequence to compare"}
+          >
+            Compare
+          </button>
+        </div>
+      </div>
 
-      {loadedSequence ? (
+      {comparisonActive && canCompare && videoUrl ? (
+        <div className={`roto-compare roto-compare--${compareLayout}`}>
+          <div className="roto-compare__half">
+            <video
+              ref={playerRef}
+              className="roto-compare__vid"
+              src={videoUrl}
+              playsInline
+              onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+            />
+            <span className="roto-compare__tag">Source</span>
+          </div>
+          <div className="roto-compare__half roto-compare__half--seq">
+            {loadedSequence.urls[comparisonFrame] ? (
+              <img
+                className="roto-compare__img"
+                src={loadedSequence.urls[comparisonFrame]}
+                alt="rotoscoped frame"
+                draggable={false}
+              />
+            ) : null}
+            <span className="roto-compare__tag">Output</span>
+            {/* Hidden preload strip so first-pass loop doesn't flicker. */}
+            <div className="roto-video__seq-preload" aria-hidden>
+              {loadedSequence.urls.map((u) => (
+                <img key={u} src={u} alt="" />
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : loadedSequence ? (
         // A completed output's PNG sequence is loaded: play it as looping
         // stop-motion. Takes priority over the source-video setup flow; Close
         // returns to whatever source-video state is underneath.
@@ -506,6 +606,9 @@ const STYLES = `
 .roto-video__label {
   position: sticky;
   top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 6px 10px;
   color: var(--text-muted);
   font-size: 10px;
@@ -764,6 +867,90 @@ const STYLES = `
   height: 0;
   overflow: hidden;
   opacity: 0;
+  pointer-events: none;
+}
+.roto-video__compare-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.roto-video__compare-btn,
+.roto-video__layout-btn {
+  padding: 2px 8px;
+  font-size: 10px;
+  font-family: inherit;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.roto-video__compare-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.roto-video__compare-btn--active {
+  color: var(--accent, #6ea8fe);
+  border-color: var(--accent, #6ea8fe);
+  background: rgba(110,168,254,0.10);
+}
+/* Comparison split pane */
+.roto-compare {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 1px;
+  background: var(--border-soft);
+}
+.roto-compare--side-by-side {
+  flex-direction: row;
+}
+.roto-compare--stacked {
+  flex-direction: column;
+}
+.roto-compare__half {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  overflow: hidden;
+}
+.roto-compare__half--seq {
+  /* Checkerboard so transparent rotoscope cut-outs read cleanly. */
+  background-color: #1a1d24;
+  background-image:
+    linear-gradient(45deg, #2a2e38 25%, transparent 25%),
+    linear-gradient(-45deg, #2a2e38 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #2a2e38 75%),
+    linear-gradient(-45deg, transparent 75%, #2a2e38 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+}
+.roto-compare__vid {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.roto-compare__img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.roto-compare__tag {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255,255,255,0.5);
   pointer-events: none;
 }
 `;
