@@ -132,8 +132,16 @@ function TerminalPanel() {
       void invoke("terminal_input", { data }).catch(() => {});
     });
 
-    // Keep the PTY sized to the visible terminal.
-    const pushResize = () => {
+    // Keep the PTY sized to the visible terminal. A gutter drag / panel rearrange
+    // fires the ResizeObserver in a rapid burst; running fit() + terminal_resize on
+    // every tick floods the CLI with SIGWINCH, so its TUI redraws frantically and
+    // can corrupt mid-frame. Debounce to the trailing edge (so we size once the
+    // layout settles, when fit() also reads stable dimensions) and only emit a
+    // resize when the computed cols/rows actually change.
+    let resizeTimer: number | undefined;
+    let lastCols = term.cols;
+    let lastRows = term.rows;
+    const applyResize = () => {
       const f = fitRef.current;
       const t = termRef.current;
       if (!f || !t) return;
@@ -142,14 +150,22 @@ function TerminalPanel() {
       } catch {
         // fit can throw if the host has zero size mid-layout; ignore.
       }
+      if (t.cols === lastCols && t.rows === lastRows) return;
+      lastCols = t.cols;
+      lastRows = t.rows;
       void invoke("terminal_resize", { cols: t.cols, rows: t.rows }).catch(
         () => {},
       );
+    };
+    const pushResize = () => {
+      if (resizeTimer !== undefined) clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(applyResize, 120);
     };
     const resizeObserver = new ResizeObserver(() => pushResize());
     resizeObserver.observe(host);
 
     return () => {
+      if (resizeTimer !== undefined) clearTimeout(resizeTimer);
       dataDisposable.dispose();
       resizeObserver.disconnect();
       term.dispose();
