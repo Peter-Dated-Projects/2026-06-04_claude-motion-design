@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -6,6 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import "./SplitLayout.css";
 
 // The three workspace panels. Same identifiers the layout tree leaves use.
@@ -226,6 +228,48 @@ export default function SplitLayout({
   // drop, so these stay valid for the whole gesture.
   const rects = useRef<Partial<Record<PanelId, DOMRect>>>({});
 
+  // Each leaf body registers its DOM node here. We render the panels ONCE (at
+  // the root, below) and portal each into whichever slot it currently occupies,
+  // rather than rendering them inline in the recursive tree. This is what keeps
+  // a panel's component instance ALIVE across a drag-to-rearrange: the live
+  // xterm + Claude PTY session, the preview iframe, and Monaco editor state all
+  // survive. Inline rendering reparented the panel to a new position in the
+  // element tree on every restructure, which React reconciles as unmount +
+  // remount -- which tore down the PTY session (TerminalPanel's cleanup kills
+  // the `claude` process). On a move the old leaf deregisters (el=null) and the
+  // new leaf registers in the same commit; the batched update nets to the new
+  // node, so the portal just re-attaches its DOM without unmounting.
+  const [slots, setSlots] = useState<Partial<Record<PanelId, HTMLElement>>>({});
+  const registerSlot = useCallback((id: PanelId, el: HTMLElement | null) => {
+    setSlots((prev) => {
+      if (el) {
+        if (prev[id] === el) return prev;
+        return { ...prev, [id]: el };
+      }
+      if (prev[id] == null) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
+  // STABLE per-id ref callback. An inline `ref={el => registerSlot(id, el)}`
+  // gets a new function identity each render, so React would detach+reattach it
+  // (null then node) on EVERY render -- which here churns slot state into an
+  // infinite update loop. A stable callback fires only on real mount/unmount
+  // (including the unmount+mount of a leaf div when the tree is rearranged).
+  const slotRefs = useRef<Partial<Record<PanelId, (el: HTMLElement | null) => void>>>({});
+  const getSlotRef = useCallback(
+    (id: PanelId) => {
+      let cb = slotRefs.current[id];
+      if (!cb) {
+        cb = (el) => registerSlot(id, el);
+        slotRefs.current[id] = cb;
+      }
+      return cb;
+    },
+    [registerSlot],
+  );
+
   const resetDrag = () => {
     setDragId(null);
     setDragStarted(false);
@@ -333,10 +377,18 @@ export default function SplitLayout({
         path={[]}
         root={value}
         onChange={onChange}
-        renderPanel={renderPanel}
+        getSlotRef={getSlotRef}
         panelTitles={panelTitles}
         drag={drag}
       />
+      {/* Panels live here, mounted once, portaled into their current leaf slot.
+          Keyed by panel id (createPortal's 3rd arg) so identity -- and thus the
+          PTY session / iframe / editor state -- is preserved when getLeaves'
+          order changes on a rearrange. */}
+      {getLeaves(value).map((id) => {
+        const host = slots[id];
+        return host ? createPortal(renderPanel(id), host, id) : null;
+      })}
       {dragStarted && (
         // Full-viewport transparent shield above the preview iframe / Monaco so
         // pointermove/up keep reaching us instead of being swallowed by those
@@ -363,12 +415,14 @@ interface NodeProps {
   path: Branch[];
   root: LayoutNode;
   onChange: (next: LayoutNode) => void;
-  renderPanel: (id: PanelId) => ReactNode;
+  // Returns a STABLE ref callback for a leaf's body DOM node; the root portals
+  // the panel into it. Stable identity is required -- see getSlotRef.
+  getSlotRef: (id: PanelId) => (el: HTMLElement | null) => void;
   panelTitles: Record<PanelId, string>;
   drag: DragApi;
 }
 
-function Node({ node, path, root, onChange, renderPanel, panelTitles, drag }: NodeProps) {
+function Node({ node, path, root, onChange, getSlotRef, panelTitles, drag }: NodeProps) {
   if (typeof node === "string") {
     const dragging = drag.draggingId === node;
     return (
@@ -385,7 +439,9 @@ function Node({ node, path, root, onChange, renderPanel, panelTitles, drag }: No
         >
           {panelTitles[node]}
         </div>
-        <div className="split-leaf__body">{renderPanel(node)}</div>
+        {/* Empty: the panel is portaled in from the root by registerSlot, so the
+            panel instance survives this leaf being remounted on a rearrange. */}
+        <div className="split-leaf__body" ref={getSlotRef(node)} />
       </div>
     );
   }
@@ -395,7 +451,7 @@ function Node({ node, path, root, onChange, renderPanel, panelTitles, drag }: No
       path={path}
       root={root}
       onChange={onChange}
-      renderPanel={renderPanel}
+      getSlotRef={getSlotRef}
       panelTitles={panelTitles}
       drag={drag}
     />
@@ -411,7 +467,7 @@ function ParentNode({
   path,
   root,
   onChange,
-  renderPanel,
+  getSlotRef,
   panelTitles,
   drag,
 }: ParentNodeProps) {
@@ -465,7 +521,7 @@ function ParentNode({
           path={[...path, "first"]}
           root={root}
           onChange={onChange}
-          renderPanel={renderPanel}
+          getSlotRef={getSlotRef}
           panelTitles={panelTitles}
           drag={drag}
         />
@@ -483,7 +539,7 @@ function ParentNode({
           path={[...path, "second"]}
           root={root}
           onChange={onChange}
-          renderPanel={renderPanel}
+          getSlotRef={getSlotRef}
           panelTitles={panelTitles}
           drag={drag}
         />

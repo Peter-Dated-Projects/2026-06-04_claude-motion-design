@@ -54,6 +54,11 @@ function TerminalPanel() {
   const fitRef = useRef<FitAddon | null>(null);
   const [exited, setExited] = useState(false);
   const [opening, setOpening] = useState(false);
+  // Gate the first `terminal_open` until the data/exit listeners are registered.
+  // Otherwise `claude`'s opening TUI frame can be emitted over `terminal://data`
+  // before anyone is listening -- a blank terminal that looks like it never
+  // started. This is the most likely cause of the "doesn't start on launch" bug.
+  const [listening, setListening] = useState(false);
   // Highlights the terminal while files are dragged over it (native OS drag).
   const [dropActive, setDropActive] = useState(false);
   // Hard re-entrancy guard: blocks a double-spawn from rapid restart clicks or
@@ -152,11 +157,13 @@ function TerminalPanel() {
         return;
       }
       unlisteners.push(onData, onExit);
+      setListening(true);
     };
 
     void register();
     return () => {
       disposed = true;
+      setListening(false);
       for (const un of unlisteners) un();
     };
   }, []);
@@ -211,14 +218,18 @@ function TerminalPanel() {
   }, []);
 
   // --- (Re-)open the PTY whenever the active project's slug changes. ---------
+  //     Wait for `listening` so we never miss claude's first frame (see above).
+  //     We deliberately DO NOT close the PTY on cleanup: the session is
+  //     project-scoped, not component-scoped. terminal_open already supersedes
+  //     (kills + respawns) the predecessor on a project switch, so an explicit
+  //     terminal_close here only created a fire-and-forget call that could race
+  //     -- and win against -- the next open, killing a freshly spawned session.
+  //     It also meant the live `claude` was torn down whenever this component
+  //     remounted (e.g. a panel rearrange), which is the session-dies bug.
   useEffect(() => {
-    if (!slug) return;
+    if (!slug || !listening) return;
     void openSession();
-
-    return () => {
-      void invoke("terminal_close").catch(() => {});
-    };
-  }, [slug, openSession]);
+  }, [slug, listening, openSession]);
 
   return (
     <section className="panel panel--terminal">
