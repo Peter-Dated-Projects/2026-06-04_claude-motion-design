@@ -173,6 +173,103 @@ pub fn list_rotoscope_outputs(app: AppHandle, slug: String) -> Result<Vec<RotoOu
 }
 
 // ---------------------------------------------------------------------------
+// Post-job artifacts: composed video + archived source clip (T-016)
+// ---------------------------------------------------------------------------
+
+/// Presence/paths of the post-job artifacts the microservice now produces for a
+/// completed rotoscope (T-016): the PNG zip, the composed transparent WebM, and
+/// the archived source clip. Each is `None` when that file is not in `dir`.
+///
+/// CROSS-STAGE NOTE: the composed `output.webm` and `source_clip.mp4` are written
+/// into the microservice's server-side work_dir and reaped after `/result` serves
+/// the zip. The client bridge (commands/rotoscoping.rs) currently extracts only
+/// the PNGs into `assets/rotoscope_*/`, so for those folders `video`/`sourceClip`
+/// come back null until that bridge is taught to pull the extra artifacts across.
+/// This command is the read-side contract that wiring will satisfy.
+#[derive(Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RotoOutputFiles {
+    /// Absolute path to the PNG-sequence zip (`result.zip` or any `*.zip`), or null.
+    pub zip: Option<String>,
+    /// Absolute path to the composed transparent video (`*.webm`), or null.
+    pub video: Option<String>,
+    /// Absolute path to the archived source clip (`source_clip.mp4`), or null.
+    pub source_clip: Option<String>,
+}
+
+/// The first directory entry whose filename (case-insensitively) satisfies
+/// `pred`, as an absolute path string. Used to locate post-job artifacts by name
+/// without assuming a single canonical filename.
+fn find_file(dir: &Path, pred: impl Fn(&str) -> bool) -> Option<String> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| pred(&n.to_ascii_lowercase()))
+                .unwrap_or(false)
+        })
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+/// Report which post-job artifacts are present in a rotoscope output `dir`: the
+/// PNG zip, the composed transparent video, and the archived source clip. A
+/// missing file is reported as null rather than an error; only an unreadable /
+/// non-existent directory errors.
+#[tauri::command]
+pub fn get_rotoscope_output_files(dir: String) -> Result<RotoOutputFiles, String> {
+    let d = Path::new(&dir);
+    if !d.is_dir() {
+        return Err(format!("not a directory: {dir}"));
+    }
+    Ok(RotoOutputFiles {
+        // Prefer the canonical result.zip but accept any zip the bridge dropped.
+        zip: find_file(d, |n| n == "result.zip")
+            .or_else(|| find_file(d, |n| n.ends_with(".zip"))),
+        video: find_file(d, |n| n == "output.webm")
+            .or_else(|| find_file(d, |n| n.ends_with(".webm"))),
+        source_clip: find_file(d, |n| n == "source_clip.mp4"),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// open_path (reveal a file or folder in the OS)
+// ---------------------------------------------------------------------------
+
+/// Open a file or folder with the OS default handler (a video in the default
+/// player, a folder in the file browser). Cross-platform via std::process --
+/// `open` on macOS, `explorer` on Windows, `xdg-open` on Linux -- mirroring
+/// projects.rs::reveal_project's no-shell-plugin approach (no extra capability).
+#[tauri::command]
+pub fn open_path(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    if !p.exists() {
+        return Err(format!("path does not exist: {path}"));
+    }
+    #[cfg(target_os = "macos")]
+    let mut cmd = std::process::Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        // `explorer` ignores its own exit code, so we don't inspect status below.
+        let mut c = std::process::Command::new("explorer");
+        c.arg(&path);
+        c
+    };
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let mut cmd = std::process::Command::new("xdg-open");
+
+    #[cfg(not(target_os = "windows"))]
+    cmd.arg(&path);
+
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("failed to open {path}: {e}"))
+}
+
+// ---------------------------------------------------------------------------
 // trim_video (clip-range trim before upload)
 // ---------------------------------------------------------------------------
 

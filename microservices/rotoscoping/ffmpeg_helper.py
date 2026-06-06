@@ -201,3 +201,89 @@ def extract_frames(
     if count == 0:
         raise FfmpegError("ffmpeg produced no frames from the video")
     return count
+
+
+def compose_video(frames_dir: Path, output_path: Path, fps: float) -> Path:
+    """Compose the `frame_*.png` output sequence into a transparent WebM.
+
+    Format choice: VP9-in-WebM with a `yuva420p` alpha plane. WebM is the only
+    common container whose video plays *with* transparency inside a Chromium
+    webview (the app's preview surface); a ProRes 4444 MOV would carry alpha but
+    not play back there. `-auto-alt-ref 0` is mandatory -- libvpx-vp9's alt-ref
+    frames drop the alpha channel otherwise.
+
+    The PNGs are decimated by frame_skip, so their indices are gapped
+    (`frame_0001.png`, `frame_0005.png`, ... for skip=3) -- there is no sequential
+    `frame_%04d.png` pattern that fits. We therefore feed them through the
+    `concat` demuxer from an explicit, sorted list with a per-frame `duration` of
+    `1/fps`, rather than `-pattern_type glob` (which many Windows static ffmpeg
+    builds omit -- and this service only runs on Windows/CUDA in production).
+    `fps` is the EFFECTIVE output fps (source fps / (frame_skip + 1)), so the
+    composed clip runs at the source's real-time speed.
+
+    Returns `output_path` on success. Raises FfmpegError if there are no frames
+    or ffmpeg fails; the caller treats compose as best-effort (the PNG zip is the
+    primary artifact) and must not let a failure here fail the whole job.
+    """
+    pngs = sorted(frames_dir.glob("frame_*.png"))
+    if not pngs:
+        raise FfmpegError(f"no frame_*.png to compose in {frames_dir}")
+    if fps <= 0:
+        raise FfmpegError(f"compose_video needs a positive fps, got {fps}")
+
+    per_frame = 1.0 / fps
+    # concat-demuxer list: each image with its on-screen duration. The demuxer
+    # ignores the duration of the LAST entry, so the final frame is listed twice
+    # (the documented concat quirk) to give it the same hold time as the rest.
+    lines: list[str] = []
+    for png in pngs:
+        lines.append(f"file '{_concat_escape(png)}'")
+        lines.append(f"duration {per_frame:.6f}")
+    lines.append(f"file '{_concat_escape(pngs[-1])}'")
+
+    list_path = output_path.with_suffix(".concat.txt")
+    list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    ffmpeg = resolve_ffmpeg()
+    cmd = [
+        ffmpeg,
+        "-v",
+        "error",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(list_path),
+        "-c:v",
+        "libvpx-vp9",
+        "-pix_fmt",
+        "yuva420p",
+        "-auto-alt-ref",
+        "0",
+        "-b:v",
+        "0",
+        "-crf",
+        "30",
+        "-r",
+        f"{fps:.6f}",
+        str(output_path),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    finally:
+        list_path.unlink(missing_ok=True)
+    if result.returncode != 0:
+        raise FfmpegError(f"ffmpeg compose_video failed: {result.stderr.strip()}")
+    return output_path
+
+
+def _concat_escape(path: Path) -> str:
+    """Escape a path for a concat-demuxer `file '...'` line.
+
+    Within the single quotes, ffmpeg's concat parser treats a single quote as a
+    terminator; the only escape it accepts is `'\\''` (close, escaped quote,
+    reopen). Backslashes are otherwise literal, so Windows paths pass through.
+    """
+    return str(path).replace("'", "'\\''")

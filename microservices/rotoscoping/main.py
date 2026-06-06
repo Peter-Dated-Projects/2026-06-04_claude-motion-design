@@ -158,6 +158,33 @@ def _run_job_blocking(
         return written
 
 
+def _compose_outputs(
+    video_path: Path, output_dir: Path, work_dir: Path, source_fps: float, frame_skip: int
+) -> None:
+    """Best-effort post-zip artifacts: a transparent video + the source clip.
+
+    Composes the PNG sequence into `work_dir/output.webm` at the effective output
+    fps (source fps / (frame_skip + 1), matching the decimation), and copies the
+    uploaded clip into `output_dir/source_clip.mp4`. The upload is always the
+    frame-accurately clipped source the client submitted (the client trims/clips
+    before upload -- see T-015), so this archive is real, not a placeholder.
+
+    Both steps are wrapped so a failure here never fails the job: the zipped PNG
+    sequence is the primary artifact and is already recorded by the time this
+    runs. Logs and swallows; raises nothing.
+    """
+    try:
+        effective_fps = source_fps / (frame_skip + 1)
+        ffmpeg_helper.compose_video(output_dir, work_dir / "output.webm", effective_fps)
+    except Exception:  # pragma: no cover - best-effort, never fail the job
+        logger.exception("compose_video failed; continuing with zip only")
+    try:
+        if video_path.exists():
+            shutil.copyfile(video_path, output_dir / "source_clip.mp4")
+    except Exception:  # pragma: no cover - best-effort
+        logger.exception("archiving source clip failed; continuing")
+
+
 def _finalize(
     job: Job,
     video_path: Path,
@@ -165,6 +192,7 @@ def _finalize(
     output_dir: Path,
     points: list[dict],
     frame_skip: int,
+    source_fps: float,
 ) -> None:
     """Run the whole job to completion in a worker thread.
 
@@ -187,6 +215,12 @@ def _finalize(
         zip_path = (work_dir or output_dir.parent) / "result.zip"
         _zip_output(output_dir, zip_path)
         job.zip_path = zip_path
+        # Post-zip extras (composed video + archived source clip). Best-effort:
+        # the zip is already the recorded primary artifact, so a compose failure
+        # must not flip the job to error.
+        _compose_outputs(
+            video_path, output_dir, work_dir or output_dir.parent, source_fps, frame_skip
+        )
         job.update(stage="done", progress=1.0, frames_done=written)
     except sam2_engine.RotoscopeCancelled:
         job.update(stage="cancelled")
@@ -244,7 +278,10 @@ async def rotoscope(
     try:
         await asyncio.to_thread(_save_upload)
         # Enforce the clip-length cap (last line of defence; client caps too).
-        duration, _fps = await asyncio.to_thread(ffmpeg_helper.probe_video, video_path)
+        # source_fps is reused below to derive the composed video's output fps.
+        duration, source_fps = await asyncio.to_thread(
+            ffmpeg_helper.probe_video, video_path
+        )
     except Exception as exc:
         logger.exception("rotoscope job %s: failed to ingest upload", job_id)
         job.update(stage="error", error=str(exc))
@@ -274,6 +311,7 @@ async def rotoscope(
             output_dir,
             parsed_points,
             frame_skip,
+            source_fps,
         )
     )
     _BACKGROUND_TASKS.add(task)

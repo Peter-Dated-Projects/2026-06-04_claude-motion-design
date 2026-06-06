@@ -31,6 +31,16 @@ interface RotoOutput {
   frames: string[];
 }
 
+/** Post-job artifacts present in an output folder, mirroring the backend
+ *  `RotoOutputFiles` (src-tauri/src/commands/roto_media.rs). Each is null when
+ *  the file is not on disk -- the composed video / source clip only appear once
+ *  the rotoscoping bridge extracts them alongside the PNGs. */
+interface RotoOutputFiles {
+  zip: string | null;
+  video: string | null;
+  sourceClip: string | null;
+}
+
 /** Source fps assumed when converting frame_skip -> effective playback fps
  *  (matches RotoVideoPanel's ASSUMED_FPS and the proposal's 30fps estimates). */
 const ASSUMED_FPS = 30;
@@ -50,20 +60,40 @@ export default function RotoOutputsPanel() {
   const loadSequence = useRotoStore((s) => s.loadSequence);
 
   const [outputs, setOutputs] = useState<RotoOutput[]>([]);
+  // Per-output-folder artifact presence (composed video / source clip / zip),
+  // keyed by the folder's absolute dir. Drives the conditional 'Open video'.
+  const [files, setFiles] = useState<Record<string, RotoOutputFiles>>({});
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!slug) {
       setOutputs([]);
+      setFiles({});
       return;
     }
     setError(null);
     try {
       const list = await invoke<RotoOutput[]>("list_rotoscope_outputs", { slug });
       setOutputs(list);
+      // Best-effort per-folder artifact probe; a single failure must not blank
+      // the list, so each is caught and folded into an empty record.
+      const entries = await Promise.all(
+        list.map(async (o): Promise<[string, RotoOutputFiles]> => {
+          try {
+            const f = await invoke<RotoOutputFiles>("get_rotoscope_output_files", {
+              dir: o.dir,
+            });
+            return [o.dir, f];
+          } catch {
+            return [o.dir, { zip: null, video: null, sourceClip: null }];
+          }
+        }),
+      );
+      setFiles(Object.fromEntries(entries));
     } catch (err) {
       setError(String(err));
       setOutputs([]);
+      setFiles({});
     }
   }, [slug]);
 
@@ -83,6 +113,16 @@ export default function RotoOutputsPanel() {
     },
     [loadSequence],
   );
+
+  // Open a file/folder with the OS default handler. stopPropagation in the
+  // button onClick keeps the row's double-click-to-play from firing too.
+  const open = useCallback(async (path: string) => {
+    try {
+      await invoke("open_path", { path });
+    } catch (err) {
+      setError(String(err));
+    }
+  }, []);
 
   return (
     <div className="roto-outputs">
@@ -124,6 +164,32 @@ export default function RotoOutputsPanel() {
                 <span className="roto-outputs__frames">
                   {o.frameCount} {o.frameCount === 1 ? "frame" : "frames"}
                 </span>
+              </div>
+              <div className="roto-outputs__actions">
+                <button
+                  type="button"
+                  className="roto-outputs__btn"
+                  title="Open folder"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void open(o.dir);
+                  }}
+                >
+                  Open folder
+                </button>
+                {files[o.dir]?.video ? (
+                  <button
+                    type="button"
+                    className="roto-outputs__btn"
+                    title="Open video"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void open(files[o.dir].video as string);
+                    }}
+                  >
+                    Open video
+                  </button>
+                ) : null}
               </div>
             </li>
           ))}
@@ -227,6 +293,28 @@ const STYLES = `
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  flex: 1 1 auto;
+}
+.roto-outputs__actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.roto-outputs__btn {
+  flex: none;
+  padding: 3px 8px;
+  font: inherit;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.roto-outputs__btn:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
 }
 .roto-outputs__name {
   min-width: 0;
