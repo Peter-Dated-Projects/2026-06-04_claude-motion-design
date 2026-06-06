@@ -116,3 +116,14 @@ export function RocketIcon({ size = 15, className }: IconProps) {
     </svg>
   );
 }
+
+// "Instagram" -- the rounded-square camera glyph (the IG reel-extraction stage).
+export function InstagramIcon({ size = 15, className }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <rect x="2.4" y="2.4" width="11.2" height="11.2" rx="3.2" />
+      <circle cx="8" cy="8" r="2.6" />
+      <circle cx="11.3" cy="4.7" r="0.7" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}

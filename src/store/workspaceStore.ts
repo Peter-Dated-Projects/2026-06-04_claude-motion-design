@@ -34,10 +34,23 @@ import type { LayoutNode, PanelId } from "../components/PanelLayout/SplitLayout"
 
 /** Icon keys understood by the workspace bar's icon registry (see icons.tsx /
  *  WorkspaceBar). Adding a stage = add a key here + a row in the registry. */
-export type WorkspaceIconKey = "edit" | "layers" | "rocket";
+export type WorkspaceIconKey = "edit" | "layers" | "rocket" | "instagram";
 
-/** Every panel a workspace could expose. New panels are added here. */
+/** The three long-lived singleton panels (Claude terminal, editor, preview)
+ *  shared across the editing-style stages. */
 export const ALL_PANELS: PanelId[] = ["terminal", "editor", "preview"];
+
+/** The Instagram stage's four panel slots. These are NOT the shared singletons;
+ *  each is filled by a downstream panel ticket via a renderPanel case. Like the
+ *  singletons they are mounted-once / detached-when-hidden (SplitLayout mountedIds
+ *  is monotonic), so a panel here is NOT remounted on re-entering the stage --
+ *  per-project reset is the panel component's own responsibility. */
+export const IG_PANELS: PanelId[] = [
+  "ig-extraction-list",
+  "ig-preview",
+  "ig-frame-grid",
+  "ig-brief",
+];
 
 // The default 3-panel arrangement, reused by workspace defs below.
 export const DEFAULT_LAYOUT: LayoutNode = {
@@ -64,7 +77,28 @@ export interface WorkspaceDef {
   defaultLayout: LayoutNode | null;
 }
 
-// Add a stage by adding an entry. Only "Editing" exists today.
+// The Instagram stage's arrangement: a left extraction-list sidebar; the main
+// area stacks a top row (IG video preview + frame grid) over the brief below.
+// Uses only the four IG slots -- no terminal/editor/preview in this stage.
+const IG_LAYOUT: LayoutNode = {
+  direction: "row",
+  first: "ig-extraction-list",
+  second: {
+    direction: "column",
+    first: {
+      direction: "row",
+      first: "ig-preview",
+      second: "ig-frame-grid",
+      splitPercentage: 50,
+    },
+    second: "ig-brief",
+    splitPercentage: 60,
+  },
+  splitPercentage: 22,
+};
+
+// Add a stage by adding an entry. "Editing" re-lays-out the three shared
+// singletons; "IG" is an additive stage over its own four panel slots.
 export const WORKSPACE_DEFS: WorkspaceDef[] = [
   {
     id: "editing",
@@ -72,6 +106,13 @@ export const WORKSPACE_DEFS: WorkspaceDef[] = [
     icon: "edit",
     availablePanels: [...ALL_PANELS],
     defaultLayout: DEFAULT_LAYOUT,
+  },
+  {
+    id: "ig",
+    name: "IG",
+    icon: "instagram",
+    availablePanels: [...IG_PANELS],
+    defaultLayout: IG_LAYOUT,
   },
 ];
 

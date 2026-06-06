@@ -63,11 +63,51 @@ const PANEL_TITLES: Record<PanelId, string> = {
   terminal: "Claude",
   editor: "Editor",
   preview: "Preview",
+  "ig-extraction-list": "Extractions",
+  "ig-preview": "Reel",
+  "ig-frame-grid": "Frames",
+  "ig-brief": "Brief",
 };
 
 // Canonical left-to-right order, used to dock a re-added panel on a sensible
-// side (a panel that sorts before everything currently shown docks left).
-const PANEL_ORDER: PanelId[] = ["terminal", "editor", "preview"];
+// side (a panel that sorts before everything currently shown docks left). The
+// IG slots sort AFTER the three singletons so editing-workspace docking is
+// unaffected (availablePanels keeps each stage's menu to its own ids anyway).
+const PANEL_ORDER: PanelId[] = [
+  "terminal",
+  "editor",
+  "preview",
+  "ig-extraction-list",
+  "ig-preview",
+  "ig-frame-grid",
+  "ig-brief",
+];
+
+// Placeholder body for the IG-stage slots until a downstream panel ticket drops
+// in the real component. Kept deliberately minimal -- just a visible label so
+// the slot is never empty (an undefined renderPanel result portals to nothing).
+function IgPanelPlaceholder({ title }: { title: string }) {
+  // Inline styles (not a stylesheet) so the stub is self-contained -- this
+  // ticket adds no CSS; the real panel components will bring their own.
+  return (
+    <div
+      className="ig-panel-placeholder"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 4,
+        height: "100%",
+        color: "var(--text-muted, #8a8f98)",
+        fontSize: 13,
+      }}
+    >
+      <span style={{ fontWeight: 600 }}>{title}</span>
+      <span style={{ fontSize: 11, opacity: 0.7 }}>Coming soon</span>
+    </div>
+  );
+}
 
 // The active workspace's panel arrangement is owned by the workspace store
 // (each workspace = a stage of the design flow with its own layout over the
@@ -766,6 +806,14 @@ function App() {
               onStartPass={startPass}
             />
           );
+        // IG stage slots -- placeholders until each panel ticket fills its slot
+        // with a real component. They must render something visible (never fall
+        // through to undefined, which createPortal renders as nothing).
+        case "ig-extraction-list":
+        case "ig-preview":
+        case "ig-frame-grid":
+        case "ig-brief":
+          return <IgPanelPlaceholder title={PANEL_TITLES[id]} />;
       }
     },
     [

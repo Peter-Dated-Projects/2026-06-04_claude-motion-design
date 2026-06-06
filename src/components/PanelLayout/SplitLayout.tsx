@@ -11,8 +11,18 @@ import {
 import { createPortal } from "react-dom";
 import "./SplitLayout.css";
 
-// The three workspace panels. Same identifiers the layout tree leaves use.
-export type PanelId = "terminal" | "editor" | "preview";
+// The workspace panels. Same identifiers the layout tree leaves use. The first
+// three are the long-lived singleton hosts (Claude terminal, editor, preview)
+// shared across every stage; the four `ig-*` ids are the Instagram stage's
+// slots (see workspaceStore WORKSPACE_DEFS + App.tsx renderPanel).
+export type PanelId =
+  | "terminal"
+  | "editor"
+  | "preview"
+  | "ig-extraction-list"
+  | "ig-preview"
+  | "ig-frame-grid"
+  | "ig-brief";
 
 // The layout tree. Deliberately the SAME shape as react-mosaic's
 // MosaicNode<PanelId> (leaf = panel id string; parent = a split with a first /
