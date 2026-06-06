@@ -60,10 +60,21 @@ pub struct PtyBridge {
 impl PtyBridge {
     /// Spawn an interactive `claude` session in project `slug`'s working dir.
     /// Any existing session is killed first (single active session).
-    pub fn open(&self, app: AppHandle, slug: String) -> Result<(), String> {
+    ///
+    /// `mode` selects a two-pass generation phase: `Some("layout")` /
+    /// `Some("motion")` appends the matching phase skills file as a SECOND
+    /// `--append-system-prompt-file` after the main one. `None` (and any
+    /// unrecognized value) reproduces the normal single-prompt session exactly.
+    pub fn open(&self, app: AppHandle, slug: String, mode: Option<String>) -> Result<(), String> {
         let config_dir = claude_bridge::claude_config_dir(&app)?;
         let mcp_config = config_dir.join(claude_bridge::MCP_CONFIG_FILE);
         let skills = config_dir.join(claude_bridge::SKILLS_FILE);
+        // Resolve the optional phase skills file for the requested pass mode.
+        let phase_skills = match mode.as_deref() {
+            Some("layout") => Some(config_dir.join(claude_bridge::LAYOUT_SKILLS_FILE)),
+            Some("motion") => Some(config_dir.join(claude_bridge::MOTION_SKILLS_FILE)),
+            _ => None,
+        };
         let project_dir = claude_bridge::project_dir(&app, &slug)?;
         std::fs::create_dir_all(&project_dir)
             .map_err(|e| format!("failed to create project dir: {e}"))?;
@@ -89,6 +100,11 @@ impl PtyBridge {
         cmd.arg(&mcp_config);
         cmd.arg("--append-system-prompt-file");
         cmd.arg(&skills);
+        // In a two-pass session, layer the phase skills on top of the main prompt.
+        if let Some(phase) = &phase_skills {
+            cmd.arg("--append-system-prompt-file");
+            cmd.arg(phase);
+        }
         cmd.cwd(&project_dir);
         // Advertise a capable terminal so the CLI's interactive UI renders well.
         cmd.env("TERM", "xterm-256color");
@@ -266,8 +282,11 @@ pub fn terminal_open(
     app: AppHandle,
     state: State<'_, PtyState>,
     slug: String,
+    // Optional two-pass phase ("layout" | "motion"). Absent in a normal session
+    // (the frontend's default `terminal_open` call omits it), which maps to None.
+    mode: Option<String>,
 ) -> Result<(), String> {
-    state.0.open(app, slug)
+    state.0.open(app, slug, mode)
 }
 
 #[tauri::command]

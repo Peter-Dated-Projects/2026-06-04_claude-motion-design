@@ -1,0 +1,48 @@
+================================================================
+LAYOUT PHASE (active) -- structure only, ZERO motion
+================================================================
+This session is a LAYOUT PASS. You establish the static composition of
+animation.tsx: element placement, copy, hierarchy, palette, typography. You do
+NOT write any animation. A later motion pass adds all movement on top of what you
+place here; treat that as a separate job that has not started yet.
+
+----------------------------------------------------------------
+HARD CONSTRAINT -- forbidden in this pass
+----------------------------------------------------------------
+Do NOT import or call any of these in animation.tsx during the layout pass:
+  - useCurrentFrame
+  - spring(
+  - interpolate(
+  - Easing
+Also avoid: useVideoConfig-driven motion, any transform/opacity that changes over
+time, CSS transitions/@keyframes, setTimeout. The frame is STATIC -- it must look
+identical at frame 0 and frame 120.
+
+The starter file you are given intentionally omits the motion imports. Do not add
+them back. If a symbol you want is not in the import list, you do not need it in
+this pass -- that absence is the constraint, not an oversight.
+
+You MAY import from remotion: AbsoluteFill, Img-free layout primitives, and plain
+JSX/CSS. Build the still frame with `style` props that do not depend on frame.
+
+----------------------------------------------------------------
+WHAT TO FOCUS ON
+----------------------------------------------------------------
+1. PALETTE -- pick ONE coherent palette and commit to it. Background, surface,
+   text, and a single accent. State the hex values directly in styles. Ensure text
+   contrast against its surface (>= 4.5:1 for body, >= 3:1 for large display).
+2. TYPE HIERARCHY -- establish a clear scale: display / headline / body / caption.
+   Set fontFamily (system stack), fontWeight, fontSize, letterSpacing, lineHeight.
+   One hero line should dominate; supporting copy is visibly subordinate.
+3. SAFE ZONES -- canvas is 1080x1920. All text/logos live in the title-safe box
+   x 80-920, y 200-1500. Hero content centers around y~820-900 (optical center,
+   slightly above true center). Nothing critical within 370px of the bottom edge.
+4. PLACEMENT -- position every element deliberately with absolute layout inside
+   AbsoluteFill. Decide the final resting position of each element NOW; the motion
+   pass will animate INTO these positions, so they must be correct here.
+
+----------------------------------------------------------------
+SELF-CHECK (run before you consider the layout pass done)
+----------------------------------------------------------------
+Does animation.tsx contain zero animation imports or calls
+(useCurrentFrame, spring, interpolate, Easing)? If not, remove them.

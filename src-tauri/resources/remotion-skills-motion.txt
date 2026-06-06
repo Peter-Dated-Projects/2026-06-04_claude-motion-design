@@ -1,0 +1,62 @@
+================================================================
+MOTION PHASE (active) -- animate the locked layout, do not restructure
+================================================================
+The layout in animation.tsx is locked. Do not change element positions, sizes,
+copy, or palette. Only add animation logic. The structural work is done; your job
+is to bring it to life by adding `transform` and `opacity` animation around what
+is already placed.
+
+A `// layout locked` marker and the motion imports have been restored at the top
+of the file. Build all motion with Remotion primitives: useCurrentFrame,
+useVideoConfig, spring, interpolate, interpolateColors, Easing. Never use CSS
+transitions, @keyframes, or setTimeout.
+
+Any structural change -- moving a div, resizing it, editing text, swapping a color
+-- is OUT OF SCOPE for this pass. If the layout looks wrong, note it briefly and
+animate it as-is; do not silently rework it.
+
+----------------------------------------------------------------
+1. INTENT -> PRESET (pick before you animate)
+----------------------------------------------------------------
+Decide the emotion + personality archetype, then map to a spring:
+  Playful   : ease-out-back, 10-20% overshoot, 200-400ms entrances
+  Premium   : smooth settle, 0% overshoot, long holds, 500-800ms
+  Corporate : measured ease-in-out, minimal overshoot
+  Energetic : snappy, high stiffness, fast stagger
+Spring default: { mass: 1, damping: 12, stiffness: 100 }. Premium: raise damping
+(no overshoot). Energetic: raise stiffness, lower damping.
+
+----------------------------------------------------------------
+2. NAMED SPRING PRESETS
+----------------------------------------------------------------
+  SNAPPY     : { mass: 0.6, damping: 14, stiffness: 180 }  fast, slight settle
+  SMOOTH     : { mass: 1,   damping: 26, stiffness: 120 }  no overshoot, premium
+  BOUNCY     : { mass: 1,   damping: 9,  stiffness: 140 }  visible overshoot
+  GENTLE     : { mass: 1.2, damping: 20, stiffness: 80  }  slow, calm
+
+----------------------------------------------------------------
+3. DISNEY PRINCIPLES (Remotion numbers)
+----------------------------------------------------------------
+- Arc: drive x and y with different interpolate ranges so paths curve; 10-20px
+  perpendicular offset at the apex.
+- Anticipation: 4-6 frames of small opposite displacement before an entrance.
+- Squash/stretch: volume-preserving scale on impact (scaleX up -> scaleY down).
+- Follow-through: trailing elements delay 2-3 frames and use a calmer spring.
+- Secondary action: 30-50% of primary amplitude, starts after the primary move.
+
+----------------------------------------------------------------
+4. CHOREOGRAPHY
+----------------------------------------------------------------
+- Stagger entrances; never start more than ~1/3 of elements on the same frame.
+- No element travels >360px without an intermediate keyframe.
+- Counter-motion: ambient background moves opposite the hero at 20-30% speed.
+- De-sync floats: 2+ floating elements use different Hz so they never phase-lock.
+- Always clamp interpolate { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+  unless extrapolation is intended.
+
+----------------------------------------------------------------
+5. STRUCTURE OF A CLIP
+----------------------------------------------------------------
+Entrance (staggered, arced) -> HOLD (let the viewer read; the longest phase) ->
+exit (faster than entrance). Animate transform/opacity ONLY -- never width/height/
+top/left/margin.

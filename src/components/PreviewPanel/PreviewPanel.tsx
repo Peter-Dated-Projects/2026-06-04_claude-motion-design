@@ -203,9 +203,14 @@ interface PreviewPanelProps {
    *  cannot preview an animation that imports relative project files -- pass `files`
    *  for multi-file support. */
   code?: string;
+  /** Active two-pass generation phase (drives the trigger buttons' active state). */
+  passMode?: "layout" | "motion" | null;
+  /** Start a layout/motion pass. When omitted, the pass-trigger controls are hidden
+   *  (e.g. RenderModal's render-preview, which has no live PTY session to drive). */
+  onStartPass?: (mode: "layout" | "motion") => void;
 }
 
-function PreviewPanel({ files, code }: PreviewPanelProps) {
+function PreviewPanel({ files, code, passMode, onStartPass }: PreviewPanelProps) {
   // Pre-built once; future code edits only re-post a compiled bundle, not a new srcdoc.
   const srcDoc = useMemo(buildSrcDoc, []);
 
@@ -490,6 +495,42 @@ function PreviewPanel({ files, code }: PreviewPanelProps) {
           <EyeIcon open={showSafeZone} />
           Safe Zone
         </button>
+
+        {onStartPass && (
+          <span
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+            title="Two-pass generation: build the static layout first, then add motion."
+          >
+            <button
+              type="button"
+              style={{
+                ...TOGGLE_STYLE,
+                color: passMode === "layout" ? "#0e7490" : "#6a6a6a",
+                borderColor: passMode === "layout" ? "#a5d8e6" : "#cfcfcf",
+                background: passMode === "layout" ? "#e0f7fa" : "#ffffff",
+              }}
+              aria-pressed={passMode === "layout"}
+              onClick={() => onStartPass("layout")}
+              title="Start the layout pass (seeds a motion-free starter)"
+            >
+              Layout
+            </button>
+            <button
+              type="button"
+              style={{
+                ...TOGGLE_STYLE,
+                color: passMode === "motion" ? "#0e7490" : "#6a6a6a",
+                borderColor: passMode === "motion" ? "#a5d8e6" : "#cfcfcf",
+                background: passMode === "motion" ? "#e0f7fa" : "#ffffff",
+              }}
+              aria-pressed={passMode === "motion"}
+              onClick={() => onStartPass("motion")}
+              title="Start the motion pass (restores motion imports, locks the layout)"
+            >
+              Motion
+            </button>
+          </span>
+        )}
 
         <button
           type="button"

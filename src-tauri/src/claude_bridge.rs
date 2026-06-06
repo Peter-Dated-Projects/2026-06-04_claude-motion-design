@@ -17,6 +17,12 @@ use tauri::{AppHandle, Manager};
 pub const MCP_CONFIG_FILE: &str = "remotion-mcp-config.json";
 pub const SKILLS_FILE: &str = "remotion-skills.txt";
 
+/// Phase-specific skills files appended (in addition to `SKILLS_FILE`) during a
+/// two-pass generation session — see `pty_bridge.rs::open`'s `mode` arg. Each is
+/// materialized alongside the main skills file by `ensure_claude_config`.
+pub const LAYOUT_SKILLS_FILE: &str = "remotion-skills-layout.txt";
+pub const MOTION_SKILLS_FILE: &str = "remotion-skills-motion.txt";
+
 /// Stores a user-supplied override for the `claude` binary (absolute path or a
 /// name on PATH). Absent / empty -> fall back to the default `claude`. Written
 /// by `set_claude_cli`, read by `claude_binary` / `get_claude_cli`.
@@ -53,6 +59,11 @@ const MCP_CONFIG_CONTENTS: &str = include_str!("../resources/remotion-mcp-config
 // which `pty_bridge.rs` passes to the CLI via one `--append-system-prompt-file`.
 const SKILLS_CONTENTS: &str = include_str!("../resources/remotion-skills.txt");
 const IMAGE_SKILLS_CONTENTS: &str = include_str!("../resources/remotion-image-skills.txt");
+// Phase skills for the two-pass flow. Materialized as their own files (NOT
+// concatenated into SKILLS_FILE) so `open` can append exactly one of them as a
+// second `--append-system-prompt-file` only when a pass mode is active.
+const LAYOUT_SKILLS_CONTENTS: &str = include_str!("../resources/remotion-skills-layout.txt");
+const MOTION_SKILLS_CONTENTS: &str = include_str!("../resources/remotion-skills-motion.txt");
 
 /// Labelled divider inserted between the main and image skill sections in the
 /// combined skills file, so the CLI reads two distinct blocks rather than one
@@ -131,6 +142,10 @@ pub fn ensure_claude_config(app: &AppHandle) -> Result<(), String> {
 
     write_if_changed(&dir.join(MCP_CONFIG_FILE), MCP_CONFIG_CONTENTS, MCP_CONFIG_FILE)?;
     write_if_changed(&dir.join(SKILLS_FILE), &combined, SKILLS_FILE)?;
+    // Phase skills files for the two-pass flow, materialized standalone so a
+    // layout/motion pass can append exactly one alongside the main skills file.
+    write_if_changed(&dir.join(LAYOUT_SKILLS_FILE), LAYOUT_SKILLS_CONTENTS, LAYOUT_SKILLS_FILE)?;
+    write_if_changed(&dir.join(MOTION_SKILLS_FILE), MOTION_SKILLS_CONTENTS, MOTION_SKILLS_FILE)?;
 
     Ok(())
 }

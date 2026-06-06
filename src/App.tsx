@@ -30,6 +30,62 @@ import type { ProjectFile } from "./types";
 
 const LAST_PROJECT_KEY = "claude-motion:lastProject";
 
+// --- Two-pass phased generation (layout pass -> motion pass) -----------------
+// A pass constrains the Claude session to one design concern. `null` is a normal
+// (unphased) session and reproduces the original behavior exactly.
+export type PassMode = "layout" | "motion" | null;
+
+// Layout-pass starter: motion imports are intentionally ABSENT so Claude cannot
+// reach for them (structural prevention). Seeded into animation.tsx at pass start.
+const LAYOUT_STARTER = `import React from "react";
+import { AbsoluteFill } from "remotion";
+// Motion APIs are intentionally not imported here — this is the layout phase (static frame only).
+
+export const fps = 30;
+export const durationInFrames = 120;
+
+const Animation: React.FC = () => {
+  // Place elements, set copy, establish hierarchy.
+  // No animation code in this pass.
+  return (
+    <AbsoluteFill style={{ backgroundColor: "#0B0E14" }}>
+      {/* structure here */}
+    </AbsoluteFill>
+  );
+};
+export default Animation;
+`;
+
+// Motion-pass seed: restore the motion imports and mark the layout locked WITHOUT
+// discarding the layout the user just built. We prepend rather than replace — a
+// second `from "remotion"` import is legal ESM, and the layout pass forbade these
+// four symbols, so there is no name collision with anything already imported.
+const MOTION_LOCK_HEADER = `// layout locked — do not change positions, sizes, copy, or palette; add animation only.
+import { useCurrentFrame, spring, interpolate, Easing } from "remotion";
+`;
+function toMotionScaffold(code: string): string {
+  return MOTION_LOCK_HEADER + code;
+}
+
+// Patterns forbidden during the layout pass. Naive substring match (can match
+// inside comments/strings) is acceptable for v1 — the correction is cheap and
+// Claude can ignore a spurious one; we do not parse the TS.
+const FORBIDDEN_LAYOUT_PATTERNS = [
+  "useCurrentFrame",
+  "spring(",
+  "interpolate(",
+  "Easing",
+];
+
+// Exact correction emitted into the terminal stream when a layout-pass file
+// contains animation code. Claude treats it as the same compile-error feedback
+// loop it already uses and fixes the file. Trailing carriage return submits it.
+const LAYOUT_VALIDATION_ERROR =
+  "[LAYOUT PHASE] animation.tsx contains animation code.\n" +
+  "This pass produces static JSX only.\n" +
+  "Remove all uses of: useCurrentFrame, spring(), interpolate(), Easing\n" +
+  "Fix this before the motion pass begins.\r";
+
 // --- Panel shell -------------------------------------------------------------
 // The three panels render through a custom recursive SplitLayout: each split has
 // a draggable gutter to resize. The layout tree is a simple binary tree
@@ -289,6 +345,14 @@ function App() {
   // `code`, combined into the map below.
   const [previewFiles, setPreviewFiles] = useState<Record<string, string>>({});
 
+  // Active two-pass generation phase. `passMode` drives the trigger UI's active
+  // state; `passModeRef` mirrors it so the file-watch listener (registered once
+  // per project) reads the latest value without re-binding. The ref is written
+  // synchronously in startPass BEFORE the seed save, so the motion seed (which
+  // restores forbidden symbols) never trips the layout validator.
+  const [passMode, setPassMode] = useState<PassMode>(null);
+  const passModeRef = useRef<PassMode>(null);
+
   const activeFile = useUIStore((s) => s.activeFile);
   const resetEditorFiles = useUIStore((s) => s.resetEditorFiles);
   const videoExportOpen = useUIStore((s) => s.videoExportOpen);
@@ -382,6 +446,36 @@ function App() {
       return Object.fromEntries(entries);
     },
     [],
+  );
+
+  // --- Two-pass generation trigger --------------------------------------------------
+  // Start a layout or motion pass: set the active mode, seed animation.tsx with the
+  // phase-appropriate scaffold, then (re)open the PTY with that mode so the matching
+  // phase skills file is appended. Re-opening supersedes the current session (a fresh
+  // session per pass). The ref is set FIRST and synchronously so the seed write — which
+  // for the motion pass restores spring/interpolate — is already gated to "motion" by
+  // the time the watcher fires, and so never trips the layout validator.
+  const startPass = useCallback(
+    async (mode: Exclude<PassMode, null>) => {
+      const slug = useProjectStore.getState().activeProject?.slug;
+      if (!slug) return;
+      passModeRef.current = mode;
+      setPassMode(mode);
+      // Layout pass starts from a clean motion-free scaffold; motion pass layers
+      // onto the existing layout (codeRef holds the live animation.tsx).
+      const seeded =
+        mode === "layout" ? LAYOUT_STARTER : toMotionScaffold(codeRef.current);
+      try {
+        await invoke("save_animation", { slug, code: seeded });
+        await invoke("terminal_open", { slug, mode });
+      } catch (err) {
+        pushToast({
+          kind: "error",
+          text: `Couldn't start ${mode} pass: ${String(err)}`,
+        });
+      }
+    },
+    [pushToast],
   );
 
   // --- Startup: check the CLI, load projects, reopen the last one -------------------
@@ -521,7 +615,21 @@ function App() {
       if (paths.includes(ENTRY_FILE)) {
         invoke<string>("load_animation", { slug })
           .then((src) => {
-            if (!disposed) setCode(src);
+            if (disposed) return;
+            setCode(src);
+            // Layout-pass validator: only during the layout pass, if the settled
+            // file contains animation code, type the exact correction into the PTY.
+            // Gated on "layout" so the motion-pass restore and normal sessions never
+            // fire it. The emit only types into stdin (never writes the file), so it
+            // can't self-trigger; the loop ends when Claude removes the code.
+            if (
+              passModeRef.current === "layout" &&
+              FORBIDDEN_LAYOUT_PATTERNS.some((p) => src.includes(p))
+            ) {
+              invoke("terminal_input", { data: LAYOUT_VALIDATION_ERROR }).catch(
+                () => {},
+              );
+            }
           })
           .catch(() => {});
       }
@@ -700,10 +808,24 @@ function App() {
             />
           );
         case "preview":
-          return <PreviewPanel files={previewFileMap} />;
+          return (
+            <PreviewPanel
+              files={previewFileMap}
+              passMode={passMode}
+              onStartPass={startPass}
+            />
+          );
       }
     },
-    [previewFileMap, files, activeContent, contentLoading, handleContentChange],
+    [
+      previewFileMap,
+      files,
+      activeContent,
+      contentLoading,
+      handleContentChange,
+      passMode,
+      startPass,
+    ],
   );
 
   return (

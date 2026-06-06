@@ -4,5 +4,7 @@ fn main() {
     println!("cargo:rerun-if-changed=resources/remotion-mcp-config.json");
     println!("cargo:rerun-if-changed=resources/remotion-skills.txt");
     println!("cargo:rerun-if-changed=resources/remotion-image-skills.txt");
+    println!("cargo:rerun-if-changed=resources/remotion-skills-layout.txt");
+    println!("cargo:rerun-if-changed=resources/remotion-skills-motion.txt");
     tauri_build::build()
 }
