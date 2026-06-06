@@ -37,54 +37,22 @@ export type PassMode = "layout" | "motion" | null;
 
 // Layout-pass starter: motion imports are intentionally ABSENT so Claude cannot
 // reach for them (structural prevention). Seeded into animation.tsx at pass start.
-const LAYOUT_STARTER = `import React from "react";
-import { AbsoluteFill } from "remotion";
-// Motion APIs are intentionally not imported here — this is the layout phase (static frame only).
-
-export const fps = 30;
-export const durationInFrames = 120;
-
-const Animation: React.FC = () => {
-  // Place elements, set copy, establish hierarchy.
-  // No animation code in this pass.
-  return (
-    <AbsoluteFill style={{ backgroundColor: "#0B0E14" }}>
-      {/* structure here */}
-    </AbsoluteFill>
-  );
-};
-export default Animation;
-`;
-
-// Motion-pass seed: restore the motion imports and mark the layout locked WITHOUT
-// discarding the layout the user just built. We prepend rather than replace — a
-// second `from "remotion"` import is legal ESM, and the layout pass forbade these
-// four symbols, so there is no name collision with anything already imported.
-const MOTION_LOCK_HEADER = `// layout locked — do not change positions, sizes, copy, or palette; add animation only.
-import { useCurrentFrame, spring, interpolate, Easing } from "remotion";
-`;
-function toMotionScaffold(code: string): string {
-  return MOTION_LOCK_HEADER + code;
-}
-
-// Patterns forbidden during the layout pass. Naive substring match (can match
-// inside comments/strings) is acceptable for v1 — the correction is cheap and
-// Claude can ignore a spurious one; we do not parse the TS.
-const FORBIDDEN_LAYOUT_PATTERNS = [
-  "useCurrentFrame",
-  "spring(",
-  "interpolate(",
-  "Easing",
-];
-
-// Exact correction emitted into the terminal stream when a layout-pass file
-// contains animation code. Claude treats it as the same compile-error feedback
-// loop it already uses and fixes the file. Trailing carriage return submits it.
-const LAYOUT_VALIDATION_ERROR =
-  "[LAYOUT PHASE] animation.tsx contains animation code.\n" +
-  "This pass produces static JSX only.\n" +
-  "Remove all uses of: useCurrentFrame, spring(), interpolate(), Easing\n" +
-  "Fix this before the motion pass begins.\r";
+// Two-pass phase directives. These are sent as a normal user turn into the LIVE
+// Claude session (via terminal_input) rather than relaunching the CLI with a phase
+// skills file appended — restarting killed the conversation and garbled the
+// terminal. The detailed motion knowledge already lives in the appended skills
+// system prompt; these messages just scope the current turn to one phase. The
+// layout-pass validator below still enforces "no motion code" structurally.
+const LAYOUT_PASS_PROMPT =
+  "Start the LAYOUT pass. Rewrite animation.tsx as a STATIC frame only: " +
+  "establish element placement, copy, hierarchy, palette, and typography. " +
+  "Do NOT add any animation yet — no useCurrentFrame, spring, interpolate, or " +
+  "Easing. I'll trigger the motion pass next.";
+const MOTION_PASS_PROMPT =
+  "Start the MOTION pass. The layout in animation.tsx is LOCKED — do not change " +
+  "element positions, sizes, copy, or palette. Add animation only: spring/" +
+  "interpolate on transform and opacity, staggered entrances, arced motion, a " +
+  "readable hold, and a fast exit, following the named motion presets.";
 
 // --- Panel shell -------------------------------------------------------------
 // The three panels render through a custom recursive SplitLayout: each split has
@@ -345,13 +313,10 @@ function App() {
   // `code`, combined into the map below.
   const [previewFiles, setPreviewFiles] = useState<Record<string, string>>({});
 
-  // Active two-pass generation phase. `passMode` drives the trigger UI's active
-  // state; `passModeRef` mirrors it so the file-watch listener (registered once
-  // per project) reads the latest value without re-binding. The ref is written
-  // synchronously in startPass BEFORE the seed save, so the motion seed (which
-  // restores forbidden symbols) never trips the layout validator.
-  const [passMode, setPassMode] = useState<PassMode>(null);
-  const passModeRef = useRef<PassMode>(null);
+  // Active two-pass generation phase. Drives the trigger UI's active state and
+  // which directive `startPass` sends. Defaults to "layout": a fresh session is
+  // expected to start by establishing structure, then advance to motion.
+  const [passMode, setPassMode] = useState<PassMode>("layout");
 
   const activeFile = useUIStore((s) => s.activeFile);
   const resetEditorFiles = useUIStore((s) => s.resetEditorFiles);
@@ -449,31 +414,30 @@ function App() {
   );
 
   // --- Two-pass generation trigger --------------------------------------------------
-  // Start a layout or motion pass: set the active mode, seed animation.tsx with the
-  // phase-appropriate scaffold, then (re)open the PTY with that mode so the matching
-  // phase skills file is appended. Re-opening supersedes the current session (a fresh
-  // session per pass). The ref is set FIRST and synchronously so the seed write — which
-  // for the motion pass restores spring/interpolate — is already gated to "motion" by
-  // the time the watcher fires, and so never trips the layout validator.
+  // Start a layout or motion pass by sending a phase directive into the LIVE Claude
+  // session and auto-submitting it. Crucially this does NOT restart the CLI or
+  // overwrite animation.tsx: the conversation context is preserved and the terminal
+  // isn't torn down.
   const startPass = useCallback(
-    async (mode: Exclude<PassMode, null>) => {
+    (mode: Exclude<PassMode, null>) => {
       const slug = useProjectStore.getState().activeProject?.slug;
       if (!slug) return;
-      passModeRef.current = mode;
       setPassMode(mode);
-      // Layout pass starts from a clean motion-free scaffold; motion pass layers
-      // onto the existing layout (codeRef holds the live animation.tsx).
-      const seeded =
-        mode === "layout" ? LAYOUT_STARTER : toMotionScaffold(codeRef.current);
-      try {
-        await invoke("save_animation", { slug, code: seeded });
-        await invoke("terminal_open", { slug, mode });
-      } catch (err) {
-        pushToast({
-          kind: "error",
-          text: `Couldn't start ${mode} pass: ${String(err)}`,
-        });
-      }
+      const directive =
+        mode === "layout" ? LAYOUT_PASS_PROMPT : MOTION_PASS_PROMPT;
+      // Send the directive text, then the Enter as a SEPARATE keystroke after a
+      // short beat. One combined "text\r" write lands as a multi-line paste that
+      // Claude's input box parks (waiting for the user to hit Enter); a discrete
+      // trailing CR after the paste settles is what actually submits the turn.
+      invoke("terminal_input", { data: directive })
+        .then(() => new Promise((res) => window.setTimeout(res, 150)))
+        .then(() => invoke("terminal_input", { data: "\r" }))
+        .catch((err) =>
+          pushToast({
+            kind: "error",
+            text: `Couldn't start ${mode} pass (is the Claude session running?): ${String(err)}`,
+          }),
+        );
     },
     [pushToast],
   );
@@ -617,19 +581,6 @@ function App() {
           .then((src) => {
             if (disposed) return;
             setCode(src);
-            // Layout-pass validator: only during the layout pass, if the settled
-            // file contains animation code, type the exact correction into the PTY.
-            // Gated on "layout" so the motion-pass restore and normal sessions never
-            // fire it. The emit only types into stdin (never writes the file), so it
-            // can't self-trigger; the loop ends when Claude removes the code.
-            if (
-              passModeRef.current === "layout" &&
-              FORBIDDEN_LAYOUT_PATTERNS.some((p) => src.includes(p))
-            ) {
-              invoke("terminal_input", { data: LAYOUT_VALIDATION_ERROR }).catch(
-                () => {},
-              );
-            }
           })
           .catch(() => {});
       }

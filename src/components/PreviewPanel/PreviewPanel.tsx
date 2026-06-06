@@ -511,7 +511,7 @@ function PreviewPanel({ files, code, passMode, onStartPass }: PreviewPanelProps)
               }}
               aria-pressed={passMode === "layout"}
               onClick={() => onStartPass("layout")}
-              title="Start the layout pass (seeds a motion-free starter)"
+              title="Ask Claude (in the current session) to build the static layout only — placement, copy, palette, type. No motion yet."
             >
               Layout
             </button>
@@ -525,7 +525,7 @@ function PreviewPanel({ files, code, passMode, onStartPass }: PreviewPanelProps)
               }}
               aria-pressed={passMode === "motion"}
               onClick={() => onStartPass("motion")}
-              title="Start the motion pass (restores motion imports, locks the layout)"
+              title="Ask Claude (in the current session) to animate the locked layout — keeps your conversation, adds motion only."
             >
               Motion
             </button>
