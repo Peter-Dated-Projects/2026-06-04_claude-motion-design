@@ -30,9 +30,17 @@ interface AssetFile {
 /** Common source-video extensions offered in the file picker. */
 const VIDEO_EXTENSIONS = ["mp4", "mov", "m4v", "webm", "mkv", "avi"];
 
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 export default function RotoAssetsPanel() {
   const slug = useProjectStore((s) => s.activeProject?.slug ?? null);
   const loadVideo = useRotoStore((s) => s.loadVideo);
+  const video = useRotoStore((s) => s.video);
+  const resetRoto = useRotoStore((s) => s.reset);
 
   const [assets, setAssets] = useState<AssetFile[]>([]);
   const [loading, setLoading] = useState(false);
@@ -89,11 +97,34 @@ export default function RotoAssetsPanel() {
 
       {error ? <div className="roto-assets__error">{error}</div> : null}
 
+      {video ? (
+        <div className="roto-assets__video-row">
+          <div className="roto-assets__video-info">
+            <span className="roto-assets__video-badge">VIDEO</span>
+            <span className="roto-assets__video-name" title={video.path}>
+              {video.path.split("/").pop() ?? video.path}
+            </span>
+            {video.durationSeconds !== undefined ? (
+              <span className="roto-assets__video-dur">
+                {formatDuration(video.durationSeconds)}
+              </span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="roto-assets__video-clear"
+            onClick={resetRoto}
+          >
+            Clear
+          </button>
+        </div>
+      ) : null}
+
       {!slug ? (
         <div className="roto-assets__hint">No project open.</div>
       ) : loading && assets.length === 0 ? (
         <div className="roto-assets__hint">Loading...</div>
-      ) : assets.length === 0 ? (
+      ) : assets.length === 0 && !video ? (
         <div className="roto-assets__hint">
           No image assets yet.
           <br />
@@ -218,5 +249,59 @@ const STYLES = `
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.roto-assets__video-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+.roto-assets__video-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.roto-assets__video-badge {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #fff;
+  background: #7c5cfc;
+  border-radius: 3px;
+}
+.roto-assets__video-name {
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.roto-assets__video-dur {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.roto-assets__video-clear {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-family: inherit;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.roto-assets__video-clear:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
 }
 `;
