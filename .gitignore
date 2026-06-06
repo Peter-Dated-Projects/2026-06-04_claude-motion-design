@@ -2,6 +2,7 @@
 # `.charm/*` ignores the run-state children; `!.charm/kb/` re-includes the KB.
 .charm/*
 !.charm/kb/
+!.charm/proposals
 
 # Node / frontend
 node_modules/
