@@ -1,22 +1,31 @@
 //! Rotoscoping microservice bridge: the Tauri backend engine.
 //!
 //! Bridges the app to an optional Windows/GPU SAM2 microservice over HTTP. The
-//! service exposes (port fixed at 7080, host from Settings, default localhost):
+//! service runs an ASYNC job model (port fixed at 7080, host from Settings,
+//! default localhost):
 //!   - GET    /health                          -> service + model + VRAM status
-//!   - POST   /rotoscope                        -> multipart upload, returns a ZIP of PNGs
-//!   - GET    /rotoscope/{job_id}/progress      -> SSE progress stream
-//!   - DELETE /rotoscope/{job_id}               -> cancel an in-flight job
+//!   - POST   /rotoscope                        -> multipart upload; returns 202
+//!       {job_id} IMMEDIATELY and runs the job in the background (it does NOT
+//!       stream the ZIP back).
+//!   - GET    /rotoscope/{job_id}/progress      -> SSE progress stream; terminal
+//!       stages are `done|error|cancelled`.
+//!   - GET    /rotoscope/{job_id}/result        -> the PNG ZIP once stage==done;
+//!       `425` while still running, `409` cancelled, `500` error, `404` unknown.
+//!   - DELETE /rotoscope/{job_id}               -> cancel an in-flight job.
 //!
 //! ## Commands (registered in lib.rs)
 //!   - `check_rotoscoping_service(host) -> RotoscopingStatus`
 //!       Never errors. Unreachable service is a NORMAL state (the workspace just
 //!       hides), so this returns `available: false` rather than an Err.
-//!   - `rotoscope_video(app, slug, host, sourcePath, startFrame, points, frameSkip,
-//!       compress, quality) -> RotoscopeResult`
+//!   - `rotoscope_video(app, slug, host, sourcePath, jobId, startFrame, points,
+//!       frameSkip, compress, quality) -> RotoscopeResult`
 //!       Clips the source from startFrame to end with the bundled ffmpeg, POSTs
-//!       the clip, unpacks the returned PNG ZIP into the project's assets, writes
-//!       meta.json. Streams progress on `roto://progress`.
-//!   - `cancel_rotoscope(host, jobId)` -> DELETE the job.
+//!       the clip (registering the job under the client-supplied `jobId`), drives
+//!       the SSE stream to completion, fetches the result ZIP and unpacks it into
+//!       the project's assets, writes meta.json. Streams progress on
+//!       `roto://progress`. Resolves only when the whole job is done.
+//!   - `cancel_rotoscope(host, jobId)` -> DELETE the job. `jobId` is the SAME id
+//!       the client passed to `rotoscope_video`, so the DELETE reaches the real job.
 //!
 //! ## Event channel
 //!   - `roto://progress`  RotoProgress  (per SSE tick from the microservice)
@@ -39,8 +48,7 @@
 
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -178,10 +186,12 @@ fn resolve_ffmpeg(app: &AppHandle) -> PathBuf {
     PathBuf::from("ffmpeg")
 }
 
-/// A short job id without pulling in a uuid crate: nanos-since-epoch plus a
-/// process-lifetime atomic counter, so two jobs started in the same nanosecond
-/// still differ.
-fn next_job_id() -> String {
+/// A short locally-unique id without pulling in a uuid crate: nanos-since-epoch
+/// plus a process-lifetime atomic counter, so two ids minted in the same
+/// nanosecond still differ. Used only for scratch-clip filenames and the
+/// multipart boundary -- the rotoscope JOB identity is the client-supplied
+/// `job_id` threaded in from the frontend (so cancel-by-id reaches the real job).
+fn next_local_id() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -295,32 +305,43 @@ fn fetch_model(host: &str) -> String {
 // SSE progress stream
 // ---------------------------------------------------------------------------
 
-/// Open the SSE progress stream and forward each tick as `roto://progress` until
-/// a terminal stage arrives or `done` is set by the main path. The job may not
-/// be registered server-side the instant we connect (the POST that creates it
-/// races this thread), so a dropped/failed connection is retried with a short
-/// backoff rather than treated as the end.
-fn run_progress_stream(app: AppHandle, host: String, job_id: String, done: Arc<AtomicBool>) {
+/// Open the SSE progress stream, forward each tick as `roto://progress`, and
+/// block until a terminal stage arrives -- returning that stage (`"done"`,
+/// `"error"`, or `"cancelled"`) so the caller can branch. The job may not be
+/// registered server-side the instant we connect (the POST that creates it can
+/// race this), so a dropped/failed connection is retried with a short backoff
+/// rather than treated as the end. The POST has already succeeded by the time we
+/// get here, so the service was up a moment ago; we still cap consecutive connect
+/// failures so a service that dies mid-job can't hang the job forever -- exceeding
+/// the cap surfaces as `"error"`.
+fn run_progress_stream(app: &AppHandle, host: &str, job_id: &str) -> String {
     let url = format!("http://{host}:{PORT}/rotoscope/{job_id}/progress");
     // No read timeout: SSE is a long-lived stream that ticks intermittently.
     let client = match reqwest::blocking::Client::builder().build() {
         Ok(c) => c,
-        Err(_) => return,
+        Err(_) => return "error".to_string(),
     };
 
-    while !done.load(Ordering::Relaxed) {
+    // ~60s of pure back-to-back connect failures (at the 250ms backoff) before we
+    // give up and treat the job as errored.
+    const MAX_CONNECT_FAILURES: u32 = 240;
+    let mut connect_failures = 0u32;
+
+    loop {
         let resp = match client.get(&url).send() {
             Ok(r) if r.status().is_success() => r,
             _ => {
+                connect_failures += 1;
+                if connect_failures >= MAX_CONNECT_FAILURES {
+                    return "error".to_string();
+                }
                 std::thread::sleep(Duration::from_millis(250));
                 continue;
             }
         };
+        connect_failures = 0;
 
         for line in BufReader::new(resp).lines().map_while(Result::ok) {
-            if done.load(Ordering::Relaxed) {
-                return;
-            }
             let payload = match line.strip_prefix("data:") {
                 Some(p) => p.trim(),
                 None => continue,
@@ -330,6 +351,7 @@ fn run_progress_stream(app: AppHandle, host: String, job_id: String, done: Arc<A
             }
             if let Ok(tick) = serde_json::from_str::<SseTick>(payload) {
                 let terminal = matches!(tick.stage.as_str(), "done" | "error" | "cancelled");
+                let stage = tick.stage.clone();
                 let _ = app.emit(
                     "roto://progress",
                     RotoProgress {
@@ -340,15 +362,12 @@ fn run_progress_stream(app: AppHandle, host: String, job_id: String, done: Arc<A
                     },
                 );
                 if terminal {
-                    done.store(true, Ordering::Relaxed);
-                    return;
+                    return stage;
                 }
             }
         }
-        // Stream ended without a terminal tick; retry unless we're finished.
-        if !done.load(Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_millis(250));
-        }
+        // Stream ended without a terminal tick; reconnect and resume.
+        std::thread::sleep(Duration::from_millis(250));
     }
 }
 
@@ -427,7 +446,7 @@ fn build_multipart(
     frame_skip: u32,
     job_id: &str,
 ) -> (Vec<u8>, String) {
-    let boundary = format!("----claudemotion{}", next_job_id());
+    let boundary = format!("----claudemotion{}", next_local_id());
     let mut body = Vec::with_capacity(video.len() + 512);
 
     let mut field = |name: &str, value: &str| {
@@ -466,6 +485,7 @@ pub async fn rotoscope_video(
     slug: String,
     host: String,
     source_path: String,
+    job_id: String,
     start_frame: u32,
     points: Vec<RotoPoint>,
     frame_skip: u32,
@@ -479,6 +499,7 @@ pub async fn rotoscope_video(
             project,
             host,
             source_path,
+            job_id,
             start_frame,
             points,
             frame_skip,
@@ -496,32 +517,24 @@ fn rotoscope_blocking(
     project: PathBuf,
     host: String,
     source_path: String,
+    job_id: String,
     start_frame: u32,
     points: Vec<RotoPoint>,
     frame_skip: u32,
     compress: bool,
     quality: u32,
 ) -> Result<RotoscopeResult, String> {
-    // 1. Clip the source to a temp file with the bundled ffmpeg.
+    // 1. Clip the source to a temp file with the bundled ffmpeg. `clip_id` names
+    //    only the scratch file; the JOB identity is the client-supplied `job_id`.
     let ffmpeg = resolve_ffmpeg(&app);
-    let job_id = next_job_id();
-    let clip_path = std::env::temp_dir().join(format!("claudemotion_roto_{job_id}.mp4"));
+    let clip_id = next_local_id();
+    let clip_path = std::env::temp_dir().join(format!("claudemotion_roto_{clip_id}.mp4"));
     clip_video(&ffmpeg, &source_path, &clip_path, start_frame, compress, quality)?;
 
-    // 2. Start the SSE progress stream (races the POST that registers the job;
-    //    the stream retries until the job exists or `done` is set).
-    let done = Arc::new(AtomicBool::new(false));
-    let progress_handle = {
-        let app = app.clone();
-        let host = host.clone();
-        let job_id = job_id.clone();
-        let done = done.clone();
-        std::thread::spawn(move || run_progress_stream(app, host, job_id, done))
-    };
-
-    // 3. Read the clip, build the multipart body, POST it, read the ZIP back.
-    //    The POST blocks for the whole segmentation, so the client has no timeout.
-    let post_result = (|| -> Result<Vec<u8>, String> {
+    // 2. Read the clip, build the multipart body, and POST it. The async service
+    //    validates + registers the job under `job_id`, then returns 202 IMMEDIATELY
+    //    (it no longer streams the ZIP back -- that is fetched from /result below).
+    let post_result = (|| -> Result<(), String> {
         let video = std::fs::read(&clip_path)
             .map_err(|e| format!("failed to read clipped video: {e}"))?;
         let points_json = serde_json::to_string(&points)
@@ -545,19 +558,28 @@ fn rotoscope_blocking(
             let msg = resp.text().unwrap_or_default();
             return Err(format!("rotoscope service returned {code}: {msg}"));
         }
-        resp.bytes()
-            .map(|b| b.to_vec())
-            .map_err(|e| format!("failed to read rotoscope response: {e}"))
+        // 202 Accepted: the body is just {"job_id": ...}; nothing to read.
+        Ok(())
     })();
 
-    // The POST has returned (or failed): stop the progress stream regardless.
-    done.store(true, Ordering::Relaxed);
-    let _ = progress_handle.join();
+    // The clip is now on the service side; drop our scratch copy either way.
     let _ = std::fs::remove_file(&clip_path);
+    post_result?;
 
-    let zip_bytes = post_result?;
+    // 3. Drive progress + wait for completion on the SSE stream. It forwards each
+    //    tick as `roto://progress` and returns the terminal stage.
+    let terminal = run_progress_stream(&app, &host, &job_id);
+    match terminal.as_str() {
+        "done" => {}
+        "cancelled" => return Err("rotoscope job was cancelled".to_string()),
+        other => return Err(format!("rotoscope job failed (stage: {other})")),
+    }
 
-    // 4. Unpack the PNG sequence into <project>/assets/rotoscope_<source_stem>/.
+    // 4. Fetch the result ZIP. SSE `done` and result-readiness can race slightly,
+    //    so retry briefly on 425/409 before giving up.
+    let zip_bytes = fetch_result_zip(&host, &job_id)?;
+
+    // 5. Unpack the PNG sequence into <project>/assets/rotoscope_<source_stem>/.
     let stem = Path::new(&source_path)
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
@@ -568,7 +590,7 @@ fn rotoscope_blocking(
 
     let frame_count = unzip_pngs(&zip_bytes, &output_dir)?;
 
-    // 5. Write meta.json (source is referenced in place, never copied).
+    // 6. Write meta.json (source is referenced in place, never copied).
     let meta = RotoMeta {
         source: source_path.clone(),
         frame_skip,
@@ -586,6 +608,41 @@ fn rotoscope_blocking(
         output_dir: output_dir.to_string_lossy().to_string(),
         frame_count,
     })
+}
+
+/// GET /rotoscope/{job_id}/result and read the ZIP bytes. The SSE `done` tick and
+/// the result becoming readable can race slightly, so retry on `425` (job not
+/// finished) and `409` (transient cancelled/conflict window) with a short sleep
+/// before giving up. Any other non-2xx is surfaced with the service's body.
+fn fetch_result_zip(host: &str, job_id: &str) -> Result<Vec<u8>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .build()
+        .map_err(|e| format!("http client init failed: {e}"))?;
+    let url = format!("http://{host}:{PORT}/rotoscope/{job_id}/result");
+
+    const MAX_ATTEMPTS: u32 = 10;
+    for attempt in 0..MAX_ATTEMPTS {
+        let resp = client
+            .get(&url)
+            .send()
+            .map_err(|e| format!("result request failed: {e}"))?;
+        let status = resp.status();
+        if status.is_success() {
+            return resp
+                .bytes()
+                .map(|b| b.to_vec())
+                .map_err(|e| format!("failed to read rotoscope result: {e}"));
+        }
+        let retryable =
+            status == reqwest::StatusCode::TOO_EARLY || status == reqwest::StatusCode::CONFLICT;
+        if retryable && attempt + 1 < MAX_ATTEMPTS {
+            std::thread::sleep(Duration::from_millis(300));
+            continue;
+        }
+        let msg = resp.text().unwrap_or_default();
+        return Err(format!("rotoscope result fetch returned {status}: {msg}"));
+    }
+    Err("rotoscope result never became ready".to_string())
 }
 
 /// Extract every `.png` entry from the ZIP into `dest` (flattened to the entry's

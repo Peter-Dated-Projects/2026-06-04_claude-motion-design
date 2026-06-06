@@ -136,14 +136,17 @@ export default function RotoVideoPanel() {
     setShowModal(false);
     if (!video || startFrame == null || !slug) return;
     const host = localStorage.getItem(ROTO_HOST_KEY) || "localhost";
-    // Provisional client id; the bar shows activity immediately. The backend owns
-    // the real job id for cancel -- which it routes via `host`, not this id.
-    startJob(`local-${Date.now()}`);
+    // One client-supplied job id, threaded all the way through: the bar shows
+    // activity immediately, the backend registers the job under it, and cancel
+    // (DELETE /rotoscope/{jobId}) targets this exact id so it reaches the real job.
+    const jobId = `roto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    startJob(jobId);
     try {
       const result = await invoke<RotoscopeResult>("rotoscope_video", {
         slug,
         host,
         sourcePath: video.path,
+        jobId,
         startFrame,
         points,
         frameSkip,
