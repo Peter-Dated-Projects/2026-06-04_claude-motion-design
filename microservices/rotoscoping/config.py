@@ -33,6 +33,11 @@ MAX_VIDEO_SECONDS: float = float(os.environ.get("ROTO_MAX_SECONDS", "60"))
 # playback is too choppy to read; it is also a guard against absurd inputs.
 MAX_FRAME_SKIP: int = 10
 
+# Number of frames processed per SAM2 propagation chunk. SAM2's memory bank
+# (output_dict) grows one tensor per propagated frame; chunking bounds peak CPU
+# RAM regardless of clip length. Between chunks state is reset and freed.
+CHUNK_SIZE: int = 150
+
 # --- Filesystem layout -----------------------------------------------------
 
 BASE_DIR: Path = Path(__file__).resolve().parent

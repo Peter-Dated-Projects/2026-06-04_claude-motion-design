@@ -22,6 +22,10 @@ here could not be executed; assumptions are flagged with VERIFY comments.
 from __future__ import annotations
 
 import logging
+import math
+import os
+import shutil
+import tempfile
 import tracemalloc
 from pathlib import Path
 from typing import Callable, Optional
@@ -146,11 +150,14 @@ def _save_transparent_png(
     mask_logits: torch.Tensor,
     frames_dir: Path,
     output_dir: Path,
+    source_frame_idx: int,
 ) -> None:
     """Composite the original frame RGB with the mask alpha -> RGBA PNG.
 
-    Output is named frame_{idx+1:04d}.png (1-based), per the proposal's
-    IMPLEMENTATION code. The source frame was extracted as {idx:05d}.jpg.
+    `frame_idx` is the chunk-local index used to read the source JPEG from
+    `frames_dir`. `source_frame_idx` is the globally-unique index used for the
+    output filename, so concurrent chunks never clobber each other's output.
+    Output is named frame_{source_frame_idx+1:04d}.png (1-based).
     """
     src_frame = frames_dir / f"{frame_idx:05d}.jpg"
     rgb = Image.open(src_frame).convert("RGB")
@@ -165,7 +172,7 @@ def _save_transparent_png(
     rgba.putalpha(alpha)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = output_dir / f"frame_{frame_idx + 1:04d}.png"
+    out_path = output_dir / f"frame_{source_frame_idx + 1:04d}.png"
     rgba.save(out_path, format="PNG")
 
 
@@ -183,6 +190,11 @@ def run_job(
     `points` is the multi-point prompt: list of {x, y, label} (label 1=fg,
     0=bg). `frame_skip` controls output decimation; SAM2 still propagates over
     every frame for mask quality, we only write every (frame_skip+1)th.
+
+    Propagation runs in chunks of config.CHUNK_SIZE frames. Between chunks,
+    state is reset and the CUDA cache is freed so that peak CPU RAM is bounded
+    regardless of clip length. The mask from each chunk's last frame is carried
+    forward to seed the next chunk's prompt.
     """
     predictor = load_predictor()
 
@@ -191,66 +203,158 @@ def run_job(
 
     job.update(stage="loading", progress=0.05, frames_total=total_frames)
 
-    state = None
+    num_chunks = math.ceil(total_frames / config.CHUNK_SIZE) if total_frames else 1
+    global_frames_processed = 0
     written = 0
+    carry_mask: Optional[np.ndarray] = None  # CPU bool (H,W) from prior chunk
+    state = None
+    current_chunk_dir: Optional[Path] = None
+
     try:
         with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-            # Offload flags (SAM2 v1.0 API, no SAM2 source changes): keep the
-            # decoded video frames and the per-frame memory bank on CPU instead
-            # of VRAM. offload_state_to_cpu is the one that makes long clips
-            # viable on a 16GB card; async_loading_frames overlaps the disk read
-            # with compute. VERIFY on CUDA -- this path cannot run on the Mac dev
-            # box (no CUDA), so the flag names/behaviour are unverified here.
-            state = predictor.init_state(
-                str(frames_dir),
-                offload_video_to_cpu=True,
-                offload_state_to_cpu=True,
-                async_loading_frames=True,
-            )
-            log_memory(logger, "after init_state")
-            if job.cancelled:
-                raise RotoscopeCancelled("job cancelled after init_state")
-
-            predictor.add_new_points_or_box(
-                state,
-                frame_idx=0,
-                obj_id=_OBJ_ID,
-                points=pts,
-                labels=labels,
-            )
-            log_memory(logger, "after add_new_points_or_box")
-            if job.cancelled:
-                raise RotoscopeCancelled("job cancelled after add_new_points_or_box")
-
             job.update(stage="segmenting", progress=0.1)
 
-            for frame_idx, _obj_ids, mask_logits in predictor.propagate_in_video(
-                state
-            ):
-                if job.cancelled:
-                    raise RotoscopeCancelled("job cancelled during propagation")
+            for chunk_idx in range(num_chunks):
+                chunk_start = chunk_idx * config.CHUNK_SIZE
+                chunk_end = min(chunk_start + config.CHUNK_SIZE, total_frames)
+                chunk_frames = chunk_end - chunk_start
 
-                if frame_idx % _MEM_LOG_EVERY_N_FRAMES == 0:
-                    log_memory(logger, f"propagation frame {frame_idx}")
-
-                if frame_idx % (frame_skip + 1) != 0:
-                    continue
-
-                _save_transparent_png(
-                    frame_idx, mask_logits, frames_dir, output_dir
+                chunk_dir = Path(
+                    tempfile.mkdtemp(
+                        dir=frames_dir.parent, prefix=f"chunk_{chunk_idx}_"
+                    )
                 )
-                written += 1
+                current_chunk_dir = chunk_dir
 
-                progress = 0.1 + 0.85 * (
-                    (frame_idx + 1) / total_frames if total_frames else 0.0
-                )
-                job.update(
-                    stage="segmenting",
-                    progress=min(progress, 0.95),
-                    frames_done=written,
-                )
-                if on_progress is not None:
-                    on_progress()
+                try:
+                    # Populate the chunk sub-dir with this chunk's frames,
+                    # renamed to a contiguous 00000.jpg sequence so SAM2's
+                    # frame loader sees them as a self-contained clip.
+                    # Linux/macOS: symlink (zero-copy). Windows: shallow copy
+                    # (NTFS symlinks require elevation).
+                    for local_idx in range(chunk_frames):
+                        src = frames_dir / f"{chunk_start + local_idx:05d}.jpg"
+                        dst = chunk_dir / f"{local_idx:05d}.jpg"
+                        if os.name == "nt":
+                            shutil.copy2(src, dst)
+                        else:
+                            dst.symlink_to(src)
+
+                    # Offload flags (SAM2 v1.0 API): keep decoded frames and
+                    # the per-frame memory bank on CPU. VERIFY on CUDA.
+                    state = predictor.init_state(
+                        str(chunk_dir),
+                        offload_video_to_cpu=True,
+                        offload_state_to_cpu=True,
+                        async_loading_frames=True,
+                    )
+                    log_memory(logger, f"after init_state chunk {chunk_idx}")
+
+                    if job.cancelled:
+                        raise RotoscopeCancelled(
+                            f"job cancelled before chunk {chunk_idx} prompt"
+                        )
+
+                    if chunk_idx == 0 or carry_mask is None:
+                        predictor.add_new_points_or_box(
+                            state,
+                            frame_idx=0,
+                            obj_id=_OBJ_ID,
+                            points=pts,
+                            labels=labels,
+                        )
+                    else:
+                        # Seed with the carry mask from the prior chunk's last
+                        # frame. add_new_mask was added in later SAM2 builds;
+                        # fall back to the point prompt if it's absent.
+                        try:
+                            predictor.add_new_mask(state, 0, _OBJ_ID, carry_mask)
+                        except AttributeError:
+                            predictor.add_new_points_or_box(
+                                state,
+                                frame_idx=0,
+                                obj_id=_OBJ_ID,
+                                points=pts,
+                                labels=labels,
+                            )
+
+                    log_memory(logger, f"after prompt chunk {chunk_idx}")
+                    if job.cancelled:
+                        raise RotoscopeCancelled(
+                            f"job cancelled after chunk {chunk_idx} prompt"
+                        )
+
+                    last_mask_logits = None
+
+                    for chunk_local_idx, _obj_ids, mask_logits in (
+                        predictor.propagate_in_video(state)
+                    ):
+                        if job.cancelled:
+                            raise RotoscopeCancelled(
+                                "job cancelled during propagation"
+                            )
+
+                        source_frame_idx = chunk_start + chunk_local_idx
+                        global_frames_processed += 1
+                        last_mask_logits = mask_logits
+
+                        if source_frame_idx % _MEM_LOG_EVERY_N_FRAMES == 0:
+                            log_memory(
+                                logger, f"propagation frame {source_frame_idx}"
+                            )
+
+                        if source_frame_idx % (frame_skip + 1) != 0:
+                            continue
+
+                        _save_transparent_png(
+                            chunk_local_idx,
+                            mask_logits,
+                            chunk_dir,
+                            output_dir,
+                            source_frame_idx,
+                        )
+                        written += 1
+
+                        progress = 0.1 + 0.85 * (
+                            global_frames_processed / total_frames
+                            if total_frames
+                            else 0.0
+                        )
+                        job.update(
+                            stage="segmenting",
+                            progress=min(progress, 0.95),
+                            frames_done=written,
+                        )
+                        if on_progress is not None:
+                            on_progress()
+
+                    # Carry the last frame's mask into the next chunk as a CPU
+                    # bool array so we can free the GPU tensor immediately.
+                    if last_mask_logits is not None:
+                        logits = last_mask_logits[0]
+                        while logits.dim() > 2:
+                            logits = logits[0]
+                        carry_mask = (logits > 0.0).cpu().numpy()
+
+                finally:
+                    # Reset per-chunk state and free the memory bank before the
+                    # next chunk init_state allocates a new one.
+                    if state is not None:
+                        try:
+                            predictor.reset_state(state)
+                        except Exception:  # pragma: no cover
+                            logger.exception(
+                                "reset_state failed for chunk %d of job %s",
+                                chunk_idx,
+                                job.job_id,
+                            )
+                        state = None
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    log_memory(logger, f"after reset_state chunk {chunk_idx}")
+
+                    shutil.rmtree(chunk_dir, ignore_errors=True)
+                    current_chunk_dir = None
 
         job.update(stage="packaging", progress=0.97, frames_done=written)
         return written
@@ -261,12 +365,16 @@ def run_job(
             "GPU ran out of memory. Try a shorter clip or a higher frame skip."
         ) from exc
     finally:
-        # reset_state ALWAYS -- without it VRAM grows unboundedly across jobs.
+        # Safety net: reset state and clean up chunk dir if an exception
+        # bypassed the inner finally (e.g. RotoscopeCancelled during symlink
+        # setup before init_state was called).
         if state is not None:
             try:
                 predictor.reset_state(state)
-            except Exception:  # pragma: no cover - defensive cleanup
-                logger.exception("reset_state failed for job %s", job.job_id)
+            except Exception:  # pragma: no cover
+                logger.exception("reset_state failed in outer finally for job %s", job.job_id)
+        if current_chunk_dir is not None:
+            shutil.rmtree(current_chunk_dir, ignore_errors=True)
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        log_memory(logger, "after reset_state")
+        log_memory(logger, "after job finally")
