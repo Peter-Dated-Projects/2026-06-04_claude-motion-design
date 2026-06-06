@@ -29,6 +29,7 @@ import asyncio
 import json
 import shutil
 import sys
+import tracemalloc
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -134,9 +135,14 @@ def _run_job_blocking(
     with GPU_LOCK:
         if job.cancelled:
             raise sam2_engine.RotoscopeCancelled("cancelled before start")
+        # Start CPU memory tracing once so the stage-boundary snapshots below and
+        # in sam2_engine have a current/peak figure to report. Idempotent.
+        if not tracemalloc.is_tracing():
+            tracemalloc.start()
         job.update(stage="extracting", progress=0.02)
         total_frames = ffmpeg_helper.extract_frames(video_path, frames_dir)
-        return sam2_engine.run_job(
+        sam2_engine.log_memory(logger, "after extract_frames")
+        written = sam2_engine.run_job(
             job=job,
             frames_dir=frames_dir,
             output_dir=output_dir,
@@ -144,6 +150,12 @@ def _run_job_blocking(
             frame_skip=frame_skip,
             total_frames=total_frames,
         )
+        # Propagation is done; the extracted source JPEGs are no longer needed.
+        # Delete them now (only the frames dir, never output/ or the zip) so the
+        # scratch footprint is not doubled while _zip_output runs. On cancel/error
+        # run_job raises, so we skip this and the caller rmtrees the whole work_dir.
+        shutil.rmtree(frames_dir, ignore_errors=True)
+        return written
 
 
 def _finalize(

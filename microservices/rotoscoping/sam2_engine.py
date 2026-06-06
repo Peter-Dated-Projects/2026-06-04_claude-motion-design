@@ -22,6 +22,7 @@ here could not be executed; assumptions are flagged with VERIFY comments.
 from __future__ import annotations
 
 import logging
+import tracemalloc
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -37,6 +38,35 @@ logger = logging.getLogger("rotoscoping.sam2")
 # Single object id used for the prompt. SAM2's add_new_points_or_box requires an
 # obj_id; we segment one subject, so a constant id is sufficient.
 _OBJ_ID = 1
+
+# How often, in propagation frames, to emit a memory snapshot. The per-frame
+# loop runs over every source frame, so logging each one would flood the file;
+# every 50th gives a usable VRAM/CPU growth curve without the noise.
+_MEM_LOG_EVERY_N_FRAMES = 50
+
+_GB = 1024**3
+
+
+def log_memory(log: logging.Logger, label: str) -> None:
+    """Log a CUDA + CPU memory snapshot at INFO under `label`.
+
+    CUDA figures come from torch.cuda.memory_allocated/reserved and are guarded
+    by torch.cuda.is_available() so this is a no-op-ish line on a CPU-only dev
+    box (it still logs the CPU side). CPU figures come from tracemalloc, which
+    must already be tracing (started in the job entry point); if it is not, the
+    CPU portion is omitted rather than reporting a misleading 0.
+    """
+    parts: list[str] = []
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / _GB
+        reserved = torch.cuda.memory_reserved() / _GB
+        parts.append(f"cuda_alloc={allocated:.2f}GB cuda_reserved={reserved:.2f}GB")
+    else:
+        parts.append("cuda=unavailable")
+    if tracemalloc.is_tracing():
+        current, peak = tracemalloc.get_traced_memory()
+        parts.append(f"cpu_current={current / _GB:.2f}GB cpu_peak={peak / _GB:.2f}GB")
+    log.info("[mem] %s: %s", label, " ".join(parts))
 
 # Module-level predictor, populated by load_predictor() at startup.
 _predictor = None
@@ -165,7 +195,21 @@ def run_job(
     written = 0
     try:
         with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-            state = predictor.init_state(str(frames_dir))
+            # Offload flags (SAM2 v1.0 API, no SAM2 source changes): keep the
+            # decoded video frames and the per-frame memory bank on CPU instead
+            # of VRAM. offload_state_to_cpu is the one that makes long clips
+            # viable on a 16GB card; async_loading_frames overlaps the disk read
+            # with compute. VERIFY on CUDA -- this path cannot run on the Mac dev
+            # box (no CUDA), so the flag names/behaviour are unverified here.
+            state = predictor.init_state(
+                str(frames_dir),
+                offload_video_to_cpu=True,
+                offload_state_to_cpu=True,
+                async_loading_frames=True,
+            )
+            log_memory(logger, "after init_state")
+            if job.cancelled:
+                raise RotoscopeCancelled("job cancelled after init_state")
 
             predictor.add_new_points_or_box(
                 state,
@@ -174,6 +218,9 @@ def run_job(
                 points=pts,
                 labels=labels,
             )
+            log_memory(logger, "after add_new_points_or_box")
+            if job.cancelled:
+                raise RotoscopeCancelled("job cancelled after add_new_points_or_box")
 
             job.update(stage="segmenting", progress=0.1)
 
@@ -182,6 +229,9 @@ def run_job(
             ):
                 if job.cancelled:
                     raise RotoscopeCancelled("job cancelled during propagation")
+
+                if frame_idx % _MEM_LOG_EVERY_N_FRAMES == 0:
+                    log_memory(logger, f"propagation frame {frame_idx}")
 
                 if frame_idx % (frame_skip + 1) != 0:
                     continue
@@ -219,3 +269,4 @@ def run_job(
                 logger.exception("reset_state failed for job %s", job.job_id)
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        log_memory(logger, "after reset_state")
