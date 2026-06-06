@@ -53,6 +53,47 @@ export const DEFAULT_FRAME_SKIP = 3;
 /** Proposal cap: beyond this the stop-motion playback is too choppy to read. */
 export const MAX_FRAME_SKIP = 10;
 
+/** Named quality preset for the pre-upload re-encode (bug-bash proposal section 6b). */
+export type QualityPreset = "original" | "high" | "fast" | "low";
+
+/** Output-resolution preset; `custom` unlocks the explicit width/height inputs. */
+export type ResolutionPreset = "360p" | "720p" | "1080p" | "custom";
+
+/**
+ * Chosen output resolution. `width`/`height` are the effective pixel dimensions
+ * the server scales to; for a named preset they mirror RESOLUTION_PRESETS, for
+ * `custom` they are whatever the user typed. `maintainAspect` (custom only) locks
+ * editing to the entered width:height ratio so changing one dimension fills the
+ * other -- NOTE: LoadedVideo carries no source dimensions, so this is the entered
+ * ratio, not the true source aspect ratio.
+ */
+export interface RotoResolution {
+  preset: ResolutionPreset;
+  width: number;
+  height: number;
+  maintainAspect: boolean;
+}
+
+/** Pixel dimensions for each named resolution preset (16:9 landscape sources). */
+export const RESOLUTION_PRESETS: Record<
+  Exclude<ResolutionPreset, "custom">,
+  { width: number; height: number }
+> = {
+  "360p": { width: 640, height: 360 },
+  "720p": { width: 1280, height: 720 },
+  "1080p": { width: 1920, height: 1080 },
+};
+
+/** Proposal default: 720p output. */
+export const DEFAULT_RESOLUTION: RotoResolution = {
+  preset: "720p",
+  ...RESOLUTION_PRESETS["720p"],
+  maintainAspect: true,
+};
+
+/** Proposal default: "fast" (~CRF 23) re-encode. */
+export const DEFAULT_QUALITY: QualityPreset = "fast";
+
 export interface RotoState {
   // --- Service discovery -----------------------------------------------------
   /** Whether the microservice answered /health at startup. Gates the workspace. */
@@ -76,6 +117,10 @@ export interface RotoState {
   points: RotoPoint[];
   /** Frames to skip between processed frames (0..MAX_FRAME_SKIP). */
   frameSkip: number;
+  /** Chosen output resolution (preset or custom width/height). */
+  resolution: RotoResolution;
+  /** Chosen re-encode quality preset; "original" skips the pre-upload re-encode. */
+  quality: QualityPreset;
 
   // --- Job lifecycle ---------------------------------------------------------
   /** Job state machine. Mutated only through the actions below. */
@@ -111,6 +156,10 @@ export interface RotoState {
   clearPoints: () => void;
   /** Set the frame-skip value (clamped to [0, MAX_FRAME_SKIP]). */
   setFrameSkip: (skip: number) => void;
+  /** Set the output resolution (preset or custom width/height). */
+  setResolution: (resolution: RotoResolution) => void;
+  /** Set the re-encode quality preset. */
+  setQuality: (quality: QualityPreset) => void;
 
   // --- Job actions -----------------------------------------------------------
   /** Begin a job: enter `uploading` with a fresh progress/error slate. */
@@ -145,6 +194,8 @@ const FRESH_SETUP = {
   startFrame: null,
   points: [] as RotoPoint[],
   frameSkip: DEFAULT_FRAME_SKIP,
+  resolution: DEFAULT_RESOLUTION,
+  quality: DEFAULT_QUALITY,
   phase: "idle" as RotoPhase,
   progress: null,
   jobId: null,
@@ -166,6 +217,8 @@ export const useRotoStore = create<RotoState>((set) => ({
       loadedSequence: null,
       startFrame: null,
       points: [],
+      resolution: DEFAULT_RESOLUTION,
+      quality: DEFAULT_QUALITY,
       progress: null,
       phase: "idle",
       error: null,
@@ -182,6 +235,10 @@ export const useRotoStore = create<RotoState>((set) => ({
   clearPoints: () => set({ points: [] }),
 
   setFrameSkip: (skip) => set({ frameSkip: clampSkip(skip) }),
+
+  setResolution: (resolution) => set({ resolution }),
+
+  setQuality: (quality) => set({ quality }),
 
   startJob: (jobId) =>
     set({ jobId, phase: "uploading", progress: null, error: null }),

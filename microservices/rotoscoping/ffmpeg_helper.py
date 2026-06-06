@@ -153,13 +153,27 @@ def _parse_frame_rate(rate: str | None) -> float:
     return float(rate)
 
 
-def extract_frames(video_path: Path, frames_dir: Path) -> int:
+def extract_frames(
+    video_path: Path,
+    frames_dir: Path,
+    scale: tuple[int, int] | None = None,
+) -> int:
     """Extract every frame of the clip to JPEGs in frames_dir, return the count.
 
     SAM2's init_state expects a directory of zero-padded JPEG frames named
     `00000.jpg`, `00001.jpg`, ... starting at 0. We extract ALL frames; the
     frame_skip decimation happens later, during PNG output, so SAM2 still
     propagates across the full sequence for mask quality.
+
+    When `scale` is given as `(width, height)`, frames are resized at extraction
+    time via `-vf scale=W:H` -- this is the section-1 memory win: SAM2 then
+    init_states + propagates over the smaller frames instead of source-resolution
+    ones. Omit it (None) to extract at the source resolution.
+
+    # VERIFY: the resolution chosen in the client controls (rotoStore.resolution)
+    # is not yet threaded to this call. TODO(submit-wiring): main.py's run_job
+    # should pass the requested (width, height) here once the rotoscope_video
+    # contract carries it (out of scope for this ticket -- main.py is untouched).
     """
     frames_dir.mkdir(parents=True, exist_ok=True)
     ffmpeg = resolve_ffmpeg()
@@ -174,8 +188,11 @@ def extract_frames(video_path: Path, frames_dir: Path) -> int:
         "0",
         "-q:v",
         "2",
-        pattern,
     ]
+    if scale is not None:
+        width, height = scale
+        cmd += ["-vf", f"scale={width}:{height}"]
+    cmd.append(pattern)
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise FfmpegError(f"ffmpeg frame extraction failed: {result.stderr.strip()}")

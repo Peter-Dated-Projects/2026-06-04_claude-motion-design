@@ -1,45 +1,46 @@
-import { useState } from "react";
+import { useRotoStore, type QualityPreset } from "../../store/rotoStore";
 
 /**
- * Modal shown after clicking "Generate Rotoscope": offers optional local ffmpeg
- * compression before the clip is uploaded to the (possibly LAN-remote) service.
+ * Confirmation shown after clicking "Generate Rotoscope".
  *
- * The compress preference is a GLOBAL setting persisted across ALL projects (per
- * the proposal), not per-project, so it lives in localStorage rather than project
- * metadata. Defaults: compression OFF, quality 80%.
+ * Settings (fps, resolution, quality) now live in the main controls / store
+ * (bug-bash proposal sections 5 + 6), so this modal no longer collects them --
+ * the old compress checkbox + quality slider are gone. It reads the chosen
+ * quality preset from the store and, on confirm, maps it to the
+ * `(compress, quality)` pair the existing submit path still expects:
+ * "Original" means skip the re-encode (compress=false); every other preset
+ * compresses with a representative quality value.
+ *
+ * (T-014 renames this to a richer read-only ReviewModal and rewires the panel;
+ * this keeps the existing onConfirm contract intact in the meantime.)
  */
 
-const COMPRESS_KEY = "claude-motion:rotoCompress";
-const QUALITY_KEY = "claude-motion:rotoQuality";
-
-const DEFAULT_COMPRESS = false;
-const DEFAULT_QUALITY = 80;
-
-/** Read the persisted global compression preference (defaults if unset/corrupt). */
-export function loadCompressionPref(): { compress: boolean; quality: number } {
-  let compress = DEFAULT_COMPRESS;
-  let quality = DEFAULT_QUALITY;
-  try {
-    compress = localStorage.getItem(COMPRESS_KEY) === "1";
-    const q = Number(localStorage.getItem(QUALITY_KEY));
-    if (Number.isFinite(q) && q >= 1 && q <= 100) quality = q;
-  } catch {
-    /* private-mode / disabled storage: fall back to defaults */
-  }
-  return { compress, quality };
-}
-
-function saveCompressionPref(compress: boolean, quality: number) {
-  try {
-    localStorage.setItem(COMPRESS_KEY, compress ? "1" : "0");
-    localStorage.setItem(QUALITY_KEY, String(quality));
-  } catch {
-    /* non-fatal: the choice still applies to this job via the callback */
+/** Map a quality preset to the legacy (compress, quality%) submit pair. */
+export function qualityToSubmitParams(preset: QualityPreset): {
+  compress: boolean;
+  quality: number;
+} {
+  switch (preset) {
+    case "original":
+      return { compress: false, quality: 100 };
+    case "high":
+      return { compress: true, quality: 90 };
+    case "fast":
+      return { compress: true, quality: 70 };
+    case "low":
+      return { compress: true, quality: 50 };
   }
 }
+
+const QUALITY_LABELS: Record<QualityPreset, string> = {
+  original: "Original (no re-encode)",
+  high: "High (~CRF 18)",
+  fast: "Fast (~CRF 23)",
+  low: "Low (~CRF 28)",
+};
 
 interface CompressionModalProps {
-  /** Persist the choice globally and start the job with these params. */
+  /** Start the job with the params derived from the chosen quality preset. */
   onConfirm: (compress: boolean, quality: number) => void;
   onCancel: () => void;
 }
@@ -48,13 +49,12 @@ export default function CompressionModal({
   onConfirm,
   onCancel,
 }: CompressionModalProps) {
-  const initial = loadCompressionPref();
-  const [compress, setCompress] = useState(initial.compress);
-  const [quality, setQuality] = useState(initial.quality);
+  const quality = useRotoStore((s) => s.quality);
+  const resolution = useRotoStore((s) => s.resolution);
 
   const confirm = () => {
-    saveCompressionPref(compress, quality);
-    onConfirm(compress, quality);
+    const { compress, quality: q } = qualityToSubmitParams(quality);
+    onConfirm(compress, q);
   };
 
   return (
@@ -70,48 +70,29 @@ export default function CompressionModal({
         className="roto-modal__card"
         role="dialog"
         aria-modal="true"
-        aria-label="Compress video before sending"
+        aria-label="Confirm rotoscope settings"
       >
-        <div className="roto-modal__title">Compress video before sending?</div>
+        <div className="roto-modal__title">Send to the rotoscoping service?</div>
         <div className="roto-modal__body">
-          Smaller file = faster transfer to the rotoscoping service.
+          Confirm the settings chosen in the controls below the video.
         </div>
 
-        <label className="roto-modal__toggle">
-          <input
-            type="checkbox"
-            checked={compress}
-            onChange={(e) => setCompress(e.target.checked)}
-          />
-          <span>Compress with ffmpeg before upload</span>
-        </label>
-
-        <div
-          className={
-            "roto-modal__quality" +
-            (compress ? "" : " roto-modal__quality--disabled")
-          }
-        >
-          <div className="roto-modal__quality-head">
-            <span>Quality</span>
-            <strong>{quality}%</strong>
+        <dl className="roto-modal__summary">
+          <div className="roto-modal__row">
+            <dt>Resolution</dt>
+            <dd>
+              {resolution.width}x{resolution.height}
+              {resolution.preset !== "custom" ? ` (${resolution.preset})` : ""}
+            </dd>
           </div>
-          <input
-            type="range"
-            min={1}
-            max={100}
-            value={quality}
-            disabled={!compress}
-            onChange={(e) => setQuality(Number(e.target.value))}
-          />
-        </div>
+          <div className="roto-modal__row">
+            <dt>Quality</dt>
+            <dd>{QUALITY_LABELS[quality]}</dd>
+          </div>
+        </dl>
 
         <div className="roto-modal__actions">
-          <button
-            type="button"
-            className="roto-modal__btn"
-            onClick={onCancel}
-          >
+          <button type="button" className="roto-modal__btn" onClick={onCancel}>
             Cancel
           </button>
           <button
@@ -160,29 +141,24 @@ const STYLES = `
   color: var(--text-muted);
   line-height: 1.5;
 }
-.roto-modal__toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  cursor: pointer;
-}
-.roto-modal__quality {
+.roto-modal__summary {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  margin: 0;
 }
-.roto-modal__quality--disabled {
-  opacity: 0.45;
-}
-.roto-modal__quality-head {
+.roto-modal__row {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
   font-size: 12px;
+}
+.roto-modal__row dt {
   color: var(--text-muted);
 }
-.roto-modal__quality input[type="range"] {
-  width: 100%;
+.roto-modal__row dd {
+  margin: 0;
+  color: var(--text);
 }
 .roto-modal__actions {
   display: flex;
