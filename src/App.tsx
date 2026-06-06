@@ -19,12 +19,16 @@ import FrameGridPanel from "./components/IGWorkspace/FrameGridPanel";
 import ExtractionListPanel from "./components/IGWorkspace/ExtractionListPanel";
 import BriefPanel from "./components/IGWorkspace/BriefPanel";
 import IGPipelineHost from "./components/IGWorkspace/useIGPipeline";
+import RotoVideoPanel from "./components/RotoPanel/RotoVideoPanel";
+import RotoAssetsPanel from "./components/RotoPanel/RotoAssetsPanel";
+import RotoOutputsPanel from "./components/RotoPanel/RotoOutputsPanel";
 import Onboarding, { type OnboardingPhase } from "./components/Onboarding";
 import Settings from "./components/Settings";
 import RenderModal from "./components/RenderModal";
 import { ChevronDownIcon, CheckIcon } from "./components/icons";
 import { useProjectStore } from "./store/projectStore";
 import { useUIStore } from "./store/uiStore";
+import { useRotoStore } from "./store/rotoStore";
 import {
   useWorkspaceStore,
   selectActiveLayout,
@@ -32,8 +36,13 @@ import {
   selectActiveDefaultLayout,
 } from "./store/workspaceStore";
 import type { ProjectFile } from "./types";
+import type { RotoProgress, RotoscopingStatus } from "./types/roto";
 
 const LAST_PROJECT_KEY = "claude-motion:lastProject";
+// Host of the optional rotoscoping microservice. Port is fixed at 7080 (backend
+// const); only the host is configurable. Defaults to localhost; a future
+// Settings control can write this key to point at a LAN workstation.
+const ROTO_HOST_KEY = "claude-motion:rotoHost";
 
 // --- Two-pass phased generation (layout pass -> motion pass) -----------------
 // A pass constrains the Claude session to one design concern. `null` is a normal
@@ -72,6 +81,9 @@ const PANEL_TITLES: Record<PanelId, string> = {
   "ig-preview": "Reel",
   "ig-frame-grid": "Frames",
   "ig-brief": "Brief",
+  "roto-video": "Video",
+  "roto-assets": "Assets",
+  "roto-outputs": "Outputs",
 };
 
 // Canonical left-to-right order, used to dock a re-added panel on a sensible
@@ -86,6 +98,9 @@ const PANEL_ORDER: PanelId[] = [
   "ig-preview",
   "ig-frame-grid",
   "ig-brief",
+  "roto-video",
+  "roto-assets",
+  "roto-outputs",
 ];
 
 // The active workspace's panel arrangement is owned by the workspace store
@@ -469,6 +484,21 @@ function App() {
       } catch {
         setClaudeInstalled(false);
       }
+      // Probe the optional rotoscoping microservice. The command never errors
+      // (an unreachable service is a normal state), but guard anyway. Its result
+      // gates whether the Rotoscope stage appears in the WorkspaceBar.
+      try {
+        const host = localStorage.getItem(ROTO_HOST_KEY) || "localhost";
+        const status = await invoke<RotoscopingStatus>(
+          "check_rotoscoping_service",
+          { host },
+        );
+        useRotoStore.getState().setServiceAvailability(status);
+      } catch {
+        useRotoStore
+          .getState()
+          .setServiceAvailability({ available: false });
+      }
       try {
         await loadProjects();
         const last = localStorage.getItem(LAST_PROJECT_KEY);
@@ -486,6 +516,27 @@ function App() {
       }
     })();
   }, [loadProjects, openProject, pushToast]);
+
+  // --- Rotoscoping progress: stream service ticks into the roto store ---------------
+  // Mounted app-level (not gated on the active workspace) so a job started in the
+  // Rotoscope stage keeps updating even if the user switches workspaces. The
+  // store stays Tauri-free; this is the one place the `roto://progress` event
+  // crosses the boundary into it. The commands that START a job (rotoscope_video
+  // / cancel_rotoscope) are wired by the panel tickets (T-004).
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen<RotoProgress>("roto://progress", (e) => {
+      if (!disposed) useRotoStore.getState().applyProgress(e.payload);
+    }).then((un) => {
+      if (disposed) un();
+      else unlisten = un;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   // --- Load the active project's animation source -----------------------------------
   useEffect(() => {
@@ -795,6 +846,15 @@ function App() {
           return <FrameGridPanel />;
         case "ig-brief":
           return <BriefPanel />;
+        // Rotoscoping stage slots -- stub panels (T-003 shell); T-004/T-005 flesh
+        // them out. They read the roto store, driven by the startup service check
+        // + roto://progress listener below.
+        case "roto-video":
+          return <RotoVideoPanel />;
+        case "roto-assets":
+          return <RotoAssetsPanel />;
+        case "roto-outputs":
+          return <RotoOutputsPanel />;
       }
     },
     [

@@ -14,7 +14,8 @@ import "./SplitLayout.css";
 // The workspace panels. Same identifiers the layout tree leaves use. The first
 // three are the long-lived singleton hosts (Claude terminal, editor, preview)
 // shared across every stage; the four `ig-*` ids are the Instagram stage's
-// slots (see workspaceStore WORKSPACE_DEFS + App.tsx renderPanel).
+// slots and the three `roto-*` ids are the rotoscoping stage's slots (see
+// workspaceStore WORKSPACE_DEFS + App.tsx renderPanel).
 export type PanelId =
   | "terminal"
   | "editor"
@@ -22,7 +23,10 @@ export type PanelId =
   | "ig-extraction-list"
   | "ig-preview"
   | "ig-frame-grid"
-  | "ig-brief";
+  | "ig-brief"
+  | "roto-video"
+  | "roto-assets"
+  | "roto-outputs";
 
 // The layout tree. Deliberately the SAME shape as react-mosaic's
 // MosaicNode<PanelId> (leaf = panel id string; parent = a split with a first /

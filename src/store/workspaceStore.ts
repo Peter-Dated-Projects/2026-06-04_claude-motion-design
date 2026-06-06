@@ -34,7 +34,7 @@ import type { LayoutNode, PanelId } from "../components/PanelLayout/SplitLayout"
 
 /** Icon keys understood by the workspace bar's icon registry (see icons.tsx /
  *  WorkspaceBar). Adding a stage = add a key here + a row in the registry. */
-export type WorkspaceIconKey = "edit" | "layers" | "rocket" | "instagram";
+export type WorkspaceIconKey = "edit" | "layers" | "rocket" | "instagram" | "rotoscope";
 
 /** The three long-lived singleton panels (Claude terminal, editor, preview)
  *  shared across the editing-style stages. */
@@ -50,6 +50,15 @@ export const IG_PANELS: PanelId[] = [
   "ig-preview",
   "ig-frame-grid",
   "ig-brief",
+];
+
+/** The rotoscoping stage's three panel slots (proposal: video preview on the
+ *  left, project-assets list top-right, rotoscope-outputs list bottom-right).
+ *  Like the IG slots these are additive, mounted-once / detached-when-hidden. */
+export const ROTO_PANELS: PanelId[] = [
+  "roto-video",
+  "roto-assets",
+  "roto-outputs",
 ];
 
 // The default 3-panel arrangement, reused by workspace defs below.
@@ -97,8 +106,23 @@ const IG_LAYOUT: LayoutNode = {
   splitPercentage: 22,
 };
 
+// The rotoscoping stage's arrangement: the video preview fills the left; the
+// right is a column stacking the project-assets list over the outputs list.
+// Uses only the three roto slots -- no terminal/editor/preview here.
+const ROTO_LAYOUT: LayoutNode = {
+  direction: "row",
+  first: "roto-video",
+  second: {
+    direction: "column",
+    first: "roto-assets",
+    second: "roto-outputs",
+    splitPercentage: 50,
+  },
+  splitPercentage: 60,
+};
+
 // Add a stage by adding an entry. "Editing" re-lays-out the three shared
-// singletons; "IG" is an additive stage over its own four panel slots.
+// singletons; "IG" and "Rotoscope" are additive stages over their own slots.
 export const WORKSPACE_DEFS: WorkspaceDef[] = [
   {
     id: "ig",
@@ -106,6 +130,13 @@ export const WORKSPACE_DEFS: WorkspaceDef[] = [
     icon: "instagram",
     availablePanels: [...IG_PANELS],
     defaultLayout: IG_LAYOUT,
+  },
+  {
+    id: "roto",
+    name: "Rotoscope",
+    icon: "rotoscope",
+    availablePanels: [...ROTO_PANELS],
+    defaultLayout: ROTO_LAYOUT,
   },
   {
     id: "editing",
