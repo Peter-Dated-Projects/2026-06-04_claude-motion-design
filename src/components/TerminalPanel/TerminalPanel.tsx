@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -27,6 +28,19 @@ const TERMINAL_THEME = {
 };
 
 /**
+ * Format dropped filesystem paths for insertion into the Claude prompt, matching
+ * how a native terminal accepts a dragged file: absolute paths, space-separated,
+ * each single-quoted only when it contains whitespace (so multi-file drops stay
+ * unambiguous). No trailing newline — we insert at the prompt and let the user
+ * keep typing rather than auto-submitting.
+ */
+function formatDroppedPaths(paths: string[]): string {
+  return paths
+    .map((p) => (/\s/.test(p) ? `'${p.replace(/'/g, "'\\''")}'` : p))
+    .join(" ");
+}
+
+/**
  * Embedded interactive Claude Code terminal. Spawns (via the backend) a real
  * `claude` PTY session in the active project's directory; Claude edits
  * animation.tsx with its own tools, and the editor/preview track that file via
@@ -40,6 +54,8 @@ function TerminalPanel() {
   const fitRef = useRef<FitAddon | null>(null);
   const [exited, setExited] = useState(false);
   const [opening, setOpening] = useState(false);
+  // Highlights the terminal while files are dragged over it (native OS drag).
+  const [dropActive, setDropActive] = useState(false);
   // Hard re-entrancy guard: blocks a double-spawn from rapid restart clicks or
   // an in-flight open racing a slug change, independent of React's async state.
   const openingRef = useRef(false);
@@ -145,6 +161,55 @@ function TerminalPanel() {
     };
   }, []);
 
+  // --- Native OS drag-and-drop of files onto the terminal. -------------------
+  //     This window uses Tauri's native drag-drop (the default), so the only way
+  //     to get a dropped file's real filesystem path is `onDragDropEvent` — the
+  //     HTML5 dataTransfer API never exposes absolute paths in a webview. The
+  //     event is window-global, so we hit-test the drop position against the
+  //     terminal host's rect and only act when the drop lands over us. On drop
+  //     we write the path(s) into the PTY stdin; the CLI echoes them back at the
+  //     prompt, just like dragging a file into a real terminal.
+  useEffect(() => {
+    // Is a window-physical-pixel point inside the terminal host? getBoundingClientRect
+    // is in CSS pixels, so scale the physical position down by the device ratio.
+    const isOverHost = (x: number, y: number): boolean => {
+      const host = hostRef.current;
+      if (!host) return false;
+      const dpr = window.devicePixelRatio || 1;
+      const lx = x / dpr;
+      const ly = y / dpr;
+      const r = host.getBoundingClientRect();
+      return lx >= r.left && lx <= r.right && ly >= r.top && ly <= r.bottom;
+    };
+
+    let unlisten: UnlistenFn | undefined;
+    let disposed = false;
+
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const p = event.payload;
+        if (p.type === "enter" || p.type === "over") {
+          setDropActive(isOverHost(p.position.x, p.position.y));
+        } else if (p.type === "leave") {
+          setDropActive(false);
+        } else if (p.type === "drop") {
+          setDropActive(false);
+          if (!p.paths.length || !isOverHost(p.position.x, p.position.y)) return;
+          const data = formatDroppedPaths(p.paths);
+          if (data) void invoke("terminal_input", { data }).catch(() => {});
+        }
+      })
+      .then((un) => {
+        if (disposed) un();
+        else unlisten = un;
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   // --- (Re-)open the PTY whenever the active project's slug changes. ---------
   useEffect(() => {
     if (!slug) return;
@@ -182,6 +247,9 @@ function TerminalPanel() {
           </div>
         )}
         <div ref={hostRef} className="terminalpanel__host" />
+        {dropActive && (
+          <div className="terminalpanel__dropmask">Drop file to add its path</div>
+        )}
       </div>
     </section>
   );

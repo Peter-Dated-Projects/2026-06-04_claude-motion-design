@@ -76,6 +76,24 @@
   background: transparent !important;
 }
 
+/* Overlay shown while files are dragged over the terminal (native OS drag). */
+.terminalpanel__dropmask {
+  position: absolute;
+  inset: 4px 0 4px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #1d4ed8;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  background: rgba(29, 78, 216, 0.08);
+  border: 2px dashed #1d4ed8;
+  border-radius: 6px;
+  pointer-events: none;
+  z-index: 3;
+}
+
 .terminalpanel__placeholder {
   position: absolute;
   inset: 0;
