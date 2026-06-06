@@ -465,6 +465,7 @@ pub async fn rotoscope_video(
     app: AppHandle,
     slug: String,
     host: String,
+    job_id: String,
     source_path: String,
     start_frame: u32,
     points: Vec<RotoPoint>,
@@ -478,6 +479,7 @@ pub async fn rotoscope_video(
             app,
             project,
             host,
+            job_id,
             source_path,
             start_frame,
             points,
@@ -495,6 +497,7 @@ fn rotoscope_blocking(
     app: AppHandle,
     project: PathBuf,
     host: String,
+    job_id: String,
     source_path: String,
     start_frame: u32,
     points: Vec<RotoPoint>,
@@ -502,10 +505,12 @@ fn rotoscope_blocking(
     compress: bool,
     quality: u32,
 ) -> Result<RotoscopeResult, String> {
-    // 1. Clip the source to a temp file with the bundled ffmpeg.
+    // 1. Clip the source to a temp file with the bundled ffmpeg. The clip filename
+    //    only needs to be locally unique, so it keeps its own generated id; the
+    //    real `job_id` (the one the service/SSE/cancel see) is the client-supplied param.
     let ffmpeg = resolve_ffmpeg(&app);
-    let job_id = next_job_id();
-    let clip_path = std::env::temp_dir().join(format!("claudemotion_roto_{job_id}.mp4"));
+    let clip_id = next_job_id();
+    let clip_path = std::env::temp_dir().join(format!("claudemotion_roto_{clip_id}.mp4"));
     clip_video(&ffmpeg, &source_path, &clip_path, start_frame, compress, quality)?;
 
     // 2. Start the SSE progress stream (races the POST that registers the job;

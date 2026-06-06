@@ -33,6 +33,18 @@ store -- results feed back through the documented actions (`startJob` /
 `jobComplete` / `setError`). Tauri arg keys are camelCase (`sourcePath`,
 `startFrame`, `frameSkip`) -- Tauri maps them to the Rust command's snake_case.
 
-The cancel id sent to the backend is `host` + the backend's own `jobId`; the panel's
-`startJob("local-<ts>")` id is a provisional client marker only (the bar shows
-activity immediately) and is not what `cancel_rotoscope` routes on.
+Job-id contract (fixed in T-008, was previously broken): there is ONE job id, and
+the client generates it. `RotoVideoPanel.runJob` makes `roto-<ts>-<rand>`, passes it
+to `startJob(jobId)` AND to `invoke("rotoscope_video", { jobId, ... })`. The Rust
+`rotoscope_video` command takes a `job_id: String` param and uses it verbatim for the
+multipart `job_id` field (the service's key) and the SSE stream URL. `cancelJob` reads
+`useRotoStore.getState().jobId` and DELETEs `/rotoscope/<id>` -- now the same id the
+service registered, so cancel actually matches.
+
+Before T-008 there were THREE ids: a `local-<ts>` store marker, a Rust-side
+`next_job_id()` (`job_<nanos>` -- the only one the service ever saw), and cancel sent
+the store marker -> guaranteed 404 -> silent no-op. `cancel_rotoscope`/`cancel_blocking`
+route by the job_id in the URL PATH, never by `host` (the old comment claiming
+host-routing was wrong). `next_job_id()` survives only for locally-unique throwaways
+(the temp clip filename, and an independent multipart boundary inside `build_multipart`),
+never as job identity.
