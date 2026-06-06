@@ -66,6 +66,11 @@ export default function RotoOutputsPanel() {
   const [files, setFiles] = useState<Record<string, RotoOutputFiles>>({});
   const [error, setError] = useState<string | null>(null);
 
+  // Rename state: which row is in edit mode and what the user has typed.
+  const [renaming, setRenaming] = useState<Record<string, boolean>>({});
+  const [renameValue, setRenameValue] = useState<Record<string, string>>({});
+  const [renameError, setRenameError] = useState<Record<string, string | null>>({});
+
   // Export UX per row: 'idle' | 'picking' (format menu open) | 'exporting'.
   const [exportState, setExportState] = useState<
     Record<string, "idle" | "picking" | "exporting">
@@ -133,6 +138,51 @@ export default function RotoOutputsPanel() {
       setError(String(err));
     }
   }, []);
+
+  const startRename = useCallback((o: RotoOutput) => {
+    setRenaming((prev) => ({ ...prev, [o.dir]: true }));
+    setRenameValue((prev) => ({ ...prev, [o.dir]: o.name }));
+    setRenameError((prev) => ({ ...prev, [o.dir]: null }));
+  }, []);
+
+  const cancelRename = useCallback((dir: string) => {
+    setRenaming((prev) => ({ ...prev, [dir]: false }));
+    setRenameError((prev) => ({ ...prev, [dir]: null }));
+  }, []);
+
+  const commitRename = useCallback(
+    async (o: RotoOutput) => {
+      const newName = (renameValue[o.dir] ?? o.name).trim();
+      if (!newName || newName === o.name) {
+        cancelRename(o.dir);
+        return;
+      }
+      setRenameError((prev) => ({ ...prev, [o.dir]: null }));
+      try {
+        const newDir = await invoke<string>("rename_rotoscope_output", {
+          oldDir: o.dir,
+          newName,
+        });
+        // Patch local state: swap dir/name for the renamed entry and re-key files.
+        setOutputs((prev) =>
+          prev.map((item) =>
+            item.dir === o.dir ? { ...item, name: newName, dir: newDir } : item,
+          ),
+        );
+        setFiles((prev) => {
+          if (!(o.dir in prev)) return prev;
+          const next = { ...prev };
+          next[newDir] = next[o.dir]!;
+          delete next[o.dir];
+          return next;
+        });
+        setRenaming((prev) => ({ ...prev, [o.dir]: false }));
+      } catch (err) {
+        setRenameError((prev) => ({ ...prev, [o.dir]: String(err) }));
+      }
+    },
+    [renameValue, cancelRename],
+  );
 
   // Register the export://progress listener once on mount so the "Exporting…"
   // indicator stays visible while the backend is running. Progress 1.0 means
@@ -224,11 +274,54 @@ export default function RotoOutputsPanel() {
                 ) : null}
               </div>
               <div className="roto-outputs__meta">
-                <span className="roto-outputs__name">{o.name}</span>
+                {renaming[o.dir] ? (
+                  <input
+                    className="roto-outputs__rename-input"
+                    autoFocus
+                    value={renameValue[o.dir] ?? o.name}
+                    onChange={(e) =>
+                      setRenameValue((prev) => ({
+                        ...prev,
+                        [o.dir]: e.target.value,
+                      }))
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void commitRename(o);
+                      } else if (e.key === "Escape") {
+                        cancelRename(o.dir);
+                      }
+                    }}
+                    onBlur={() => void commitRename(o)}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                ) : (
+                  <span className="roto-outputs__name">{o.name}</span>
+                )}
+                {renameError[o.dir] ? (
+                  <span
+                    className="roto-outputs__rename-err"
+                    title={renameError[o.dir] ?? ""}
+                  >
+                    {renameError[o.dir]}
+                  </span>
+                ) : null}
                 <span className="roto-outputs__frames">
                   {o.frameCount} {o.frameCount === 1 ? "frame" : "frames"}
                 </span>
               </div>
+              <button
+                type="button"
+                className="roto-outputs__rename-btn"
+                title="Rename"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  startRename(o);
+                }}
+              >
+                Edit
+              </button>
               <div className="roto-outputs__actions">
                 <button
                   type="button"
@@ -472,5 +565,46 @@ const STYLES = `
   color: #fca5a5;
   font-weight: bold;
   cursor: default;
+}
+.roto-outputs__rename-btn {
+  flex: none;
+  padding: 3px 8px;
+  font: inherit;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.roto-outputs__row:hover .roto-outputs__rename-btn {
+  opacity: 1;
+}
+.roto-outputs__rename-btn:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.roto-outputs__rename-input {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--text-faint);
+  border-radius: 3px;
+  padding: 1px 4px;
+  min-width: 0;
+  width: 100%;
+  outline: none;
+}
+.roto-outputs__rename-input:focus {
+  border-color: var(--text-muted);
+}
+.roto-outputs__rename-err {
+  font-size: 10px;
+  color: #fca5a5;
+  word-break: break-word;
+  line-height: 1.3;
 }
 `;

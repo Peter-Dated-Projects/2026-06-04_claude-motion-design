@@ -525,6 +525,49 @@ fn run_ffmpeg(ffmpeg: &Path, args: &[String], label: &str) -> Result<(), String>
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// rename_rotoscope_output: rename an output folder in-place
+// ---------------------------------------------------------------------------
+
+/// Rename a rotoscope output folder from its current path to a new leaf name.
+/// Returns the new absolute path on success.
+///
+/// Validation: `new_name` must be non-empty, must not be exactly `"."` or
+/// `".."`, and must not contain `/`, `\`, or null bytes. Dots within the name
+/// (e.g. `v2.1`, `subject.run2`) are explicitly allowed.
+#[tauri::command]
+pub fn rename_rotoscope_output(old_dir: String, new_name: String) -> Result<String, String> {
+    // --- validate new_name ---
+    if new_name.is_empty() {
+        return Err("name cannot be empty".to_string());
+    }
+    if new_name == "." || new_name == ".." {
+        return Err(format!("'{new_name}' is not a valid folder name"));
+    }
+    if new_name.contains('/') || new_name.contains('\\') || new_name.contains('\0') {
+        return Err("name must not contain '/', '\\', or null bytes".to_string());
+    }
+
+    let old_path = Path::new(&old_dir);
+    if !old_path.is_dir() {
+        return Err(format!("source directory does not exist: {old_dir}"));
+    }
+
+    let parent = old_path
+        .parent()
+        .ok_or_else(|| format!("could not determine parent of: {old_dir}"))?;
+
+    let new_path = parent.join(&new_name);
+    if new_path.exists() {
+        return Err(format!("a file or folder named '{new_name}' already exists"));
+    }
+
+    std::fs::rename(old_path, &new_path)
+        .map_err(|e| format!("rename failed: {e}"))?;
+
+    Ok(new_path.to_string_lossy().to_string())
+}
+
 /// Trim a source video to the half-open range [start_secs, end_secs) into a
 /// throwaway temp file, returning its absolute path. Re-encodes with x264 at a
 /// near-lossless CRF (a stream copy can't cut at an arbitrary, non-keyframe
