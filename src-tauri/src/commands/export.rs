@@ -61,7 +61,7 @@ fn copy_dir_all(src: &Path, dest: &Path) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn export_tsx(app: AppHandle, slug: String) -> Result<String, String> {
+pub async fn export_tsx(app: AppHandle, slug: String) -> Result<String, String> {
     let dir = projects_root(&app)?.join(&slug);
     if !dir.is_dir() {
         return Err(format!("project '{slug}' not found"));
@@ -74,12 +74,20 @@ pub fn export_tsx(app: AppHandle, slug: String) -> Result<String, String> {
     let code = fs::read_to_string(&tsx_path)
         .map_err(|e| format!("failed to read animation.tsx: {e}"))?;
 
-    let chosen = app
-        .dialog()
-        .file()
-        .add_filter("TypeScript", &["tsx"])
-        .set_file_name(&format!("{slug}.tsx"))
-        .blocking_save_file();
+    // Off-main-thread dialog (see choose_render_output for why).
+    let chosen = {
+        let app = app.clone();
+        let slug = slug.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            app.dialog()
+                .file()
+                .add_filter("TypeScript", &["tsx"])
+                .set_file_name(&format!("{slug}.tsx"))
+                .blocking_save_file()
+        })
+        .await
+        .map_err(|e| format!("file dialog task failed: {e}"))?
+    };
     let path = match chosen {
         Some(fp) => fp
             .into_path()
@@ -153,8 +161,50 @@ fn resolve_runner(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String
     Err(render_toolchain::TOOLCHAIN_MISSING.to_string())
 }
 
+/// Open a native save dialog for the render output and return the chosen path
+/// (or `None` if the user cancelled). The render modal calls this for its
+/// "Choose location" step -- file selection is decoupled from `export_mp4` so it
+/// can happen in the modal before the user commits to rendering.
 #[tauri::command]
-pub fn export_mp4(app: AppHandle, slug: String) -> Result<String, String> {
+pub async fn choose_render_output(
+    app: AppHandle,
+    slug: String,
+    ext: String,
+) -> Result<Option<String>, String> {
+    // The dialog plugin's blocking_* APIs deadlock if called on the main thread,
+    // and Tauri runs *sync* commands there -- so run the dialog on the blocking
+    // pool (this command is async, but the panel itself must be off the main thread).
+    let chosen = tauri::async_runtime::spawn_blocking(move || {
+        let label = format!("{} Video", ext.to_uppercase());
+        app.dialog()
+            .file()
+            .add_filter(&label, &[ext.as_str()])
+            .set_file_name(&format!("{slug}.{ext}"))
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|e| format!("file dialog task failed: {e}"))?;
+    match chosen {
+        Some(fp) => Ok(Some(
+            fp.into_path()
+                .map_err(|e| format!("invalid save path: {e}"))?
+                .to_string_lossy()
+                .to_string(),
+        )),
+        None => Ok(None),
+    }
+}
+
+/// Render the project's animation to `out_path` with the given codec + quality.
+/// File selection happens earlier via `choose_render_output`; this just renders.
+#[tauri::command]
+pub async fn export_mp4(
+    app: AppHandle,
+    slug: String,
+    out_path: String,
+    codec: String,
+    quality: String,
+) -> Result<String, String> {
     let dir = projects_root(&app)?.join(&slug);
     if !dir.is_dir() {
         return Err(format!("project '{slug}' not found"));
@@ -169,29 +219,42 @@ pub fn export_mp4(app: AppHandle, slug: String) -> Result<String, String> {
         return Err("animation.tsx is empty -- generate an animation first.".to_string());
     }
 
-    // Resolve the renderer up front: if the toolchain isn't installed (and no dev
-    // fallback), bail with TOOLCHAIN_MISSING *before* popping a save dialog so the
-    // frontend can show the install prompt instead.
+    // Resolve the renderer; if neither the toolchain nor a dev fallback is
+    // available, bail with TOOLCHAIN_MISSING so the frontend can prompt to install.
     let (node, script, cwd) = resolve_runner(&app)?;
+    let out = PathBuf::from(&out_path);
 
-    let chosen = app
-        .dialog()
-        .file()
-        .add_filter("MP4 Video", &["mp4"])
-        .set_file_name(&format!("{slug}.mp4"))
-        .blocking_save_file();
-    let out = match chosen {
-        Some(fp) => fp
-            .into_path()
-            .map_err(|e| format!("invalid save path: {e}"))?,
-        None => return Err(CANCELLED.to_string()),
-    };
+    // The render is a multi-second/-minute blocking pipeline -- run it on the
+    // blocking pool so it never freezes the UI (Tauri runs sync commands on the
+    // main thread). Progress events are emitted from inside.
+    let out_for_render = out.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        run_render(&app, &node, &script, &cwd, &dir, &out_for_render, &codec, &quality)
+    })
+    .await
+    .map_err(|e| format!("render task failed: {e}"))?
+}
 
-    let mut child = Command::new(&node)
-        .arg(&script)
-        .arg(&dir)
-        .arg(&out)
-        .current_dir(&cwd)
+/// Spawn the Node render process, stream `PROGRESS` lines as `export://progress`
+/// events, and return the output path on success or the stderr tail on failure.
+/// Blocking; call from `spawn_blocking`, never directly on a command thread.
+fn run_render(
+    app: &AppHandle,
+    node: &Path,
+    script: &Path,
+    cwd: &Path,
+    dir: &Path,
+    out: &Path,
+    codec: &str,
+    quality: &str,
+) -> Result<String, String> {
+    let mut child = Command::new(node)
+        .arg(script)
+        .arg(dir)
+        .arg(out)
+        .arg(codec)
+        .arg(quality)
+        .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

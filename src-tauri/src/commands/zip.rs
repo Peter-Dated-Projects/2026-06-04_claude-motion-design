@@ -66,7 +66,7 @@ fn collect_files(root: &Path, rel: &Path, out: &mut Vec<(PathBuf, String)>) -> R
 }
 
 #[tauri::command]
-pub fn export_project_zip(app: AppHandle, slug: String) -> Result<String, String> {
+pub async fn export_project_zip(app: AppHandle, slug: String) -> Result<String, String> {
     let dir = projects_root(&app)?.join(&slug);
     if !dir.is_dir() {
         return Err(format!("project '{slug}' not found"));
@@ -92,12 +92,21 @@ pub fn export_project_zip(app: AppHandle, slug: String) -> Result<String, String
     let cursor = zip.finish().map_err(|e| format!("failed to finalize zip: {e}"))?;
     let bytes = cursor.into_inner();
 
-    let chosen = app
-        .dialog()
-        .file()
-        .add_filter("ZIP", &["zip"])
-        .set_file_name(&format!("{slug}.zip"))
-        .blocking_save_file();
+    // Off-main-thread dialog: blocking_* deadlocks on the main thread where Tauri
+    // runs sync commands.
+    let chosen = {
+        let app = app.clone();
+        let slug = slug.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            app.dialog()
+                .file()
+                .add_filter("ZIP", &["zip"])
+                .set_file_name(&format!("{slug}.zip"))
+                .blocking_save_file()
+        })
+        .await
+        .map_err(|e| format!("file dialog task failed: {e}"))?
+    };
     let path = match chosen {
         Some(fp) => fp
             .into_path()
@@ -110,12 +119,18 @@ pub fn export_project_zip(app: AppHandle, slug: String) -> Result<String, String
 }
 
 #[tauri::command]
-pub fn import_project_zip(app: AppHandle) -> Result<Project, String> {
-    let chosen = app
-        .dialog()
-        .file()
-        .add_filter("ZIP", &["zip"])
-        .blocking_pick_file();
+pub async fn import_project_zip(app: AppHandle) -> Result<Project, String> {
+    let chosen = {
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            app.dialog()
+                .file()
+                .add_filter("ZIP", &["zip"])
+                .blocking_pick_file()
+        })
+        .await
+        .map_err(|e| format!("file dialog task failed: {e}"))?
+    };
     let src = match chosen {
         Some(fp) => fp
             .into_path()

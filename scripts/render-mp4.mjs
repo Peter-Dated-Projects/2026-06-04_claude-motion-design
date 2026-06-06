@@ -16,7 +16,9 @@
 //   - Animations are self-contained (skills prompt forbids external assets /
 //     staticFile), so no publicDir / asset resolution is needed here.
 //
-// Usage: node scripts/render-mp4.mjs <projectDir> <outPath>
+// Usage: node scripts/render-mp4.mjs <projectDir> <outPath> [codec] [quality]
+//   codec:   h264 (default) | h265 | vp9 | gif
+//   quality: high (default) | medium | low   (maps to a per-codec CRF; ignored for gif)
 // Progress is emitted to stdout as `PROGRESS <0..1>` lines for the caller to
 // parse; everything else (Remotion logs, the first-run Chrome download) goes to
 // stderr. Exits non-zero with a message on stderr on failure.
@@ -28,12 +30,26 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { bundle } from "@remotion/bundler";
 import { renderMedia, selectComposition } from "@remotion/renderer";
 
-const [, , projectDir, outPath] = process.argv;
+const [, , projectDir, outPath, codecArg, qualityArg] = process.argv;
 
 if (!projectDir || !outPath) {
-  process.stderr.write("usage: render-mp4.mjs <projectDir> <outPath>\n");
+  process.stderr.write("usage: render-mp4.mjs <projectDir> <outPath> [codec] [quality]\n");
   process.exit(2);
 }
+
+// Default to H.264 / high so older callers (and the 2-arg invocation) still work.
+const codec = codecArg || "h264";
+const quality = qualityArg || "high";
+
+// Per-codec CRF (constant-rate-factor: lower = higher quality / bigger file). The
+// ranges differ by codec, so keep the mapping here rather than in the caller. GIF
+// has no CRF.
+const CRF_BY_CODEC = {
+  h264: { high: 18, medium: 23, low: 28 },
+  h265: { high: 20, medium: 26, low: 32 },
+  vp9: { high: 23, medium: 31, low: 40 },
+};
+const crf = CRF_BY_CODEC[codec]?.[quality];
 
 const animationPath = path.join(projectDir, "animation.tsx");
 if (!fs.existsSync(animationPath)) {
@@ -117,7 +133,8 @@ async function main() {
     await renderMedia({
       serveUrl,
       composition,
-      codec: "h264",
+      codec,
+      ...(crf != null ? { crf } : {}),
       outputLocation: outPath,
       inputProps: {},
       onProgress: ({ progress }) => {

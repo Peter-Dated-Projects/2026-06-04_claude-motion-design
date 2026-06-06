@@ -73,3 +73,46 @@ export function CloseIcon({ size = 15, className }: IconProps) {
     </svg>
   );
 }
+
+export function PlusIcon({ size = 14, className }: IconProps) {
+  return (
+    <svg {...base(size, className)} strokeWidth={1.8}>
+      <path d="M8 3.2v9.6M3.2 8h9.6" />
+    </svg>
+  );
+}
+
+// --- Workspace-stage icons --------------------------------------------------
+// One per stage of the design workflow, referenced by key from the workspace
+// bar's icon registry. Same 16-viewBox / currentColor convention as the rest.
+
+// "Editing" -- a pen nib (the motion-design authoring stage).
+export function EditIcon({ size = 15, className }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <path d="M11 2.6a1.5 1.5 0 0 1 2.1 2.1l-8.3 8.3-2.7.6.6-2.7z" />
+      <path d="M9.7 3.9 11.7 5.9" />
+    </svg>
+  );
+}
+
+// "Layers" -- stacked planes (a storyboard / compose stage).
+export function LayersIcon({ size = 15, className }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <path d="M8 2.2 14 5.4 8 8.6 2 5.4z" />
+      <path d="M2.4 8.2 8 11.2l5.6-3M2.4 10.8 8 13.8l5.6-3" />
+    </svg>
+  );
+}
+
+// "Rocket" -- a ship/publish/export stage.
+export function RocketIcon({ size = 15, className }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <path d="M6.4 9.6C6.4 5.6 9 2.8 12.8 2.8c.4 0 .8 0 1.2.1.1.4.1.8.1 1.2 0 3.8-2.8 6.4-6.8 6.4z" />
+      <path d="M6.4 9.6 4 9.2l1.6-2M9.6 9.6l.4 2.4-2-1.6M4.4 11.6 2.6 13.4M5.8 13l-1.8 1.8" />
+      <circle cx="10.4" cy="5.6" r="1" />
+    </svg>
+  );
+}

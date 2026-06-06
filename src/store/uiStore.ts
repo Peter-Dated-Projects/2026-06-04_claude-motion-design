@@ -31,6 +31,9 @@ export interface UIState {
   /** The path of the file currently shown in the editor, or null if none. */
   activeFile: string | null;
 
+  /** Whether the video-export (render) modal is open. */
+  videoExportOpen: boolean;
+
   setPanelWidths: (widths: [number, number, number]) => void;
   setIsGenerating: (value: boolean) => void;
   toggleSafeZone: () => void;
@@ -49,6 +52,10 @@ export interface UIState {
   setActiveFile: (path: string) => void;
   /** Reset the editor to a single open tab (used on project switch). */
   resetEditorFiles: (entry: string) => void;
+
+  /** Open / close the video-export (render) modal. */
+  openVideoExport: () => void;
+  closeVideoExport: () => void;
 }
 
 const PANEL_WIDTHS_KEY = "claude-motion:panelWidths";
@@ -131,6 +138,7 @@ export const useUIStore = create<UIState>((set) => ({
   codePanelView: loadCodePanelView(),
   openFiles: [],
   activeFile: null,
+  videoExportOpen: false,
 
   setPanelWidths: (widths) => {
     persistPanelWidths(widths);
@@ -175,4 +183,7 @@ export const useUIStore = create<UIState>((set) => ({
   setActiveFile: (path) => set({ activeFile: path }),
 
   resetEditorFiles: (entry) => set({ openFiles: [entry], activeFile: entry }),
+
+  openVideoExport: () => set({ videoExportOpen: true }),
+  closeVideoExport: () => set({ videoExportOpen: false }),
 }));

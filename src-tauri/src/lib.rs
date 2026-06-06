@@ -66,6 +66,7 @@ pub fn run() {
             commands::zip::import_project_zip,
             commands::export::export_tsx,
             commands::export::export_mp4,
+            commands::export::choose_render_output,
             commands::render_toolchain::render_toolchain_status,
             commands::render_toolchain::install_render_toolchain,
         ])

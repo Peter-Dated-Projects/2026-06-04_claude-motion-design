@@ -124,8 +124,17 @@ fn emit(app: &AppHandle, phase: &'static str, progress: f64) {
 
 /// Download, verify, and unpack the toolchain. Idempotent: returns immediately if
 /// already installed. Streams `toolchain://progress` events for the UI.
+///
+/// Runs the blocking work on the blocking pool: Tauri executes sync commands on
+/// the main thread, and a multi-second download there would freeze the UI.
 #[tauri::command]
-pub fn install_render_toolchain(app: AppHandle) -> Result<(), String> {
+pub async fn install_render_toolchain(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || install_toolchain_blocking(app))
+        .await
+        .map_err(|e| format!("install task failed: {e}"))?
+}
+
+fn install_toolchain_blocking(app: AppHandle) -> Result<(), String> {
     if is_installed(&app) {
         return Ok(());
     }

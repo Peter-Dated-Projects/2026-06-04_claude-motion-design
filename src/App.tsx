@@ -10,14 +10,22 @@ import SplitLayout, {
 } from "./components/PanelLayout/SplitLayout";
 import Toolbar from "./components/layout/Toolbar";
 import StatusBar from "./components/layout/StatusBar";
+import WorkspaceBar from "./components/layout/WorkspaceBar";
 import TerminalPanel from "./components/TerminalPanel/TerminalPanel";
 import CodePanel, { ENTRY_FILE } from "./components/CodePanel/CodePanel";
 import PreviewPanel from "./components/PreviewPanel/PreviewPanel";
 import Onboarding, { type OnboardingPhase } from "./components/Onboarding";
 import Settings from "./components/Settings";
+import RenderModal from "./components/RenderModal";
 import { ChevronDownIcon, CheckIcon } from "./components/icons";
 import { useProjectStore } from "./store/projectStore";
 import { useUIStore } from "./store/uiStore";
+import {
+  useWorkspaceStore,
+  selectActiveLayout,
+  selectActiveAvailablePanels,
+  selectActiveDefaultLayout,
+} from "./store/workspaceStore";
 import type { ProjectFile } from "./types";
 
 const LAST_PROJECT_KEY = "claude-motion:lastProject";
@@ -37,31 +45,9 @@ const PANEL_TITLES: Record<PanelId, string> = {
 // side (a panel that sorts before everything currently shown docks left).
 const PANEL_ORDER: PanelId[] = ["terminal", "editor", "preview"];
 
-const LAYOUT_KEY = "claude-motion:panelLayout";
-
-const DEFAULT_LAYOUT: LayoutNode = {
-  direction: "row",
-  first: "terminal",
-  second: {
-    direction: "row",
-    first: "editor",
-    second: "preview",
-    splitPercentage: 50,
-  },
-  splitPercentage: 33,
-};
-
-// A null layout means every panel is hidden -- a valid (if degenerate) state we
-// render as an empty state rather than handing SplitLayout an empty tree.
-function loadLayout(): LayoutNode | null {
-  try {
-    const raw = localStorage.getItem(LAYOUT_KEY);
-    if (raw) return JSON.parse(raw) as LayoutNode | null;
-  } catch {
-    // Corrupt/absent layout falls back to the default.
-  }
-  return DEFAULT_LAYOUT;
-}
+// The active workspace's panel arrangement is owned by the workspace store
+// (each workspace = a stage of the design flow with its own layout over the
+// SAME shared panels). DEFAULT_LAYOUT lives there too.
 
 // Remove a panel leaf from the layout tree, collapsing its now-only-child
 // parent into the surviving sibling so the rest of the user's arrangement is
@@ -201,10 +187,13 @@ function ToastStack({
 // ticket's scope, so the controls live on the panels region itself.
 function PanelsControls({
   visible,
+  available,
   onToggle,
   onReset,
 }: {
   visible: PanelId[];
+  // The active workspace's allowed panels; the menu only offers these.
+  available: PanelId[];
   onToggle: (id: PanelId) => void;
   onReset: () => void;
 }) {
@@ -242,7 +231,7 @@ function PanelsControls({
       </button>
       {open && (
         <div className="panels-controls__dropdown" role="menu">
-          {PANEL_ORDER.map((id) => {
+          {PANEL_ORDER.filter((id) => available.includes(id)).map((id) => {
             const shown = visible.includes(id);
             // Never let the user hide the last remaining panel.
             const lockLast = shown && visible.length <= 1;
@@ -271,7 +260,13 @@ function PanelsControls({
 }
 
 function App() {
-  const [layout, setLayout] = useState<LayoutNode | null>(loadLayout);
+  // The layout shown is the active workspace's; switching workspaces swaps the
+  // tree SplitLayout renders while the panel hosts (PTY/preview/editor) stay
+  // mounted, so those sessions are shared across workspaces.
+  const layout = useWorkspaceStore(selectActiveLayout);
+  const availablePanels = useWorkspaceStore(selectActiveAvailablePanels);
+  const activeDefaultLayout = useWorkspaceStore(selectActiveDefaultLayout);
+  const setWorkspaceLayout = useWorkspaceStore((s) => s.setLayout);
 
   const projects = useProjectStore((s) => s.projects);
   const activeProject = useProjectStore((s) => s.activeProject);
@@ -290,6 +285,8 @@ function App() {
 
   const activeFile = useUIStore((s) => s.activeFile);
   const resetEditorFiles = useUIStore((s) => s.resetEditorFiles);
+  const videoExportOpen = useUIStore((s) => s.videoExportOpen);
+  const closeVideoExport = useUIStore((s) => s.closeVideoExport);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
@@ -575,16 +572,13 @@ function App() {
     [createProject, pushToast],
   );
 
-  // Persist the tile layout so a rearranged/resized workspace survives reloads.
-  // Accepts null (all panels hidden) -- stored as-is so the empty state sticks.
-  const applyLayout = useCallback((next: LayoutNode | null) => {
-    setLayout(next);
-    try {
-      localStorage.setItem(LAYOUT_KEY, JSON.stringify(next));
-    } catch {
-      // Best-effort.
-    }
-  }, []);
+  // Persist the active workspace's layout so a rearranged/resized workspace
+  // survives reloads. Accepts null (all panels hidden), stored as-is. The store
+  // handles localStorage; this just writes to the active workspace.
+  const applyLayout = useCallback(
+    (next: LayoutNode | null) => setWorkspaceLayout(next),
+    [setWorkspaceLayout],
+  );
 
   // Panels currently in the tree; drives the menu checkmarks and last-panel lock.
   const visiblePanels = getLeaves(layout);
@@ -596,15 +590,19 @@ function App() {
         if (leaves.length <= 1) return; // never hide the last panel
         applyLayout(removeLeaf(layout, id));
       } else {
+        // Only panels in the active workspace's config can be added.
+        if (!availablePanels.includes(id)) return;
         applyLayout(addLeaf(layout, id));
       }
     },
-    [layout, applyLayout],
+    [layout, availablePanels, applyLayout],
   );
 
+  // Reset to the active workspace's hard-coded default arrangement (which only
+  // ever contains panels the workspace's config allows).
   const resetLayout = useCallback(
-    () => applyLayout(DEFAULT_LAYOUT),
-    [applyLayout],
+    () => applyLayout(activeDefaultLayout),
+    [applyLayout, activeDefaultLayout],
   );
 
   // Content shown in the editor for the active tab: the entry file uses `code`
@@ -648,6 +646,7 @@ function App() {
       <div className="panels">
         <PanelsControls
           visible={visiblePanels}
+          available={availablePanels}
           onToggle={togglePanel}
           onReset={resetLayout}
         />
@@ -672,6 +671,7 @@ function App() {
         )}
       </div>
       <StatusBar />
+      <WorkspaceBar />
 
       {onboardingPhase && (
         <Onboarding
@@ -686,6 +686,13 @@ function App() {
       )}
 
       <Settings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
+      <RenderModal
+        open={videoExportOpen}
+        slug={activeProject?.slug ?? null}
+        code={code}
+        onClose={closeVideoExport}
+      />
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>

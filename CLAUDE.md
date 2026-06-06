@@ -31,6 +31,17 @@ Rust `#[tauri::command]`; the backend pushes streams via `emit` → frontend
 - `store/projectStore.ts` — active project + project list
 - `store/uiStore.ts` — active editor file, selected text, render logs
 - `store/renderLogStore.ts` — preview compile output
+- `store/workspaceStore.ts` — workspaces = stages of the design flow within a
+  project. A workspace is just a saved panel *layout* over the SAME three
+  singleton panels; switching workspaces swaps the tree `SplitLayout` renders
+  while the Claude PTY / preview / editor hosts stay mounted, so those sessions
+  are shared across workspaces. The stages themselves are hard-coded config in
+  `WORKSPACE_DEFS` (id/name/icon/availablePanels/defaultLayout — never persisted,
+  users can't create or configure them); only the mutable bits persist — each
+  workspace's rearranged `layout` and the `activeWorkspaceId`. `availablePanels`
+  scopes a stage's show/hide menu (a panel not listed can't be added there).
+  Editor tabs are still global (uiStore) → effectively all-synced; scope
+  `openFiles`/`activeFile` per workspace here to make tab sync selectable.
 
 **Panels** (`components/`)
 - `PanelLayout/SplitLayout.tsx` — custom recursive split-pane engine. Pointer-driven
@@ -44,8 +55,13 @@ Rust `#[tauri::command]`; the backend pushes streams via `emit` → frontend
 - `CodePanel/MonacoEditor.tsx`, `hooks/useMonaco.ts` — editor mount/config
 - `PreviewPanel/PreviewPanel.tsx` — Remotion player, phone bezel, replay controls,
   render logs (`PhoneBezel`, `ReplayControls`, `SafeZoneOverlay`, `RenderLogPanel`)
-- `layout/` — `Toolbar`, `StatusBar`, `ProjectMenu`, `ExportMenu`
+- `layout/` — `Toolbar`, `StatusBar`, `ProjectMenu`, `ExportMenu`,
+  `WorkspaceBar` (bottom bar of design-flow stage tabs; backed by workspaceStore)
 - `Onboarding.tsx`, `Settings.tsx` — first-run + settings
+- `RenderModal.tsx` — video-export modal: live preview (reuses `PreviewPanel`) +
+  format/quality settings + save-location picker + Render button, then phased
+  progress (install toolchain → render → done/error). Opened via the `videoExportOpen`
+  flag in uiStore (set by ExportMenu's MP4 item).
 - `workers/sandbox-compiler.worker.ts` + `assets/sandbox-frame.html` — preview compile sandbox
 
 ### Backend (`src-tauri/src/`)
