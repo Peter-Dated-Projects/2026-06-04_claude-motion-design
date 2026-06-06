@@ -14,6 +14,11 @@ import WorkspaceBar from "./components/layout/WorkspaceBar";
 import TerminalPanel from "./components/TerminalPanel/TerminalPanel";
 import CodePanel, { ENTRY_FILE } from "./components/CodePanel/CodePanel";
 import PreviewPanel from "./components/PreviewPanel/PreviewPanel";
+import VideoPreviewPanel from "./components/IGWorkspace/VideoPreviewPanel";
+import FrameGridPanel from "./components/IGWorkspace/FrameGridPanel";
+import ExtractionListPanel from "./components/IGWorkspace/ExtractionListPanel";
+import BriefPanel from "./components/IGWorkspace/BriefPanel";
+import IGPipelineHost from "./components/IGWorkspace/useIGPipeline";
 import Onboarding, { type OnboardingPhase } from "./components/Onboarding";
 import Settings from "./components/Settings";
 import RenderModal from "./components/RenderModal";
@@ -82,32 +87,6 @@ const PANEL_ORDER: PanelId[] = [
   "ig-frame-grid",
   "ig-brief",
 ];
-
-// Placeholder body for the IG-stage slots until a downstream panel ticket drops
-// in the real component. Kept deliberately minimal -- just a visible label so
-// the slot is never empty (an undefined renderPanel result portals to nothing).
-function IgPanelPlaceholder({ title }: { title: string }) {
-  // Inline styles (not a stylesheet) so the stub is self-contained -- this
-  // ticket adds no CSS; the real panel components will bring their own.
-  return (
-    <div
-      className="ig-panel-placeholder"
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 4,
-        height: "100%",
-        color: "var(--text-muted, #8a8f98)",
-        fontSize: 13,
-      }}
-    >
-      <span style={{ fontWeight: 600 }}>{title}</span>
-      <span style={{ fontSize: 11, opacity: 0.7 }}>Coming soon</span>
-    </div>
-  );
-}
 
 // The active workspace's panel arrangement is owned by the workspace store
 // (each workspace = a stage of the design flow with its own layout over the
@@ -806,14 +785,16 @@ function App() {
               onStartPass={startPass}
             />
           );
-        // IG stage slots -- placeholders until each panel ticket fills its slot
-        // with a real component. They must render something visible (never fall
-        // through to undefined, which createPortal renders as nothing).
+        // IG stage slots -- the real panels. The Tauri <-> store bridge that
+        // drives them (events + invoke) is IGPipelineHost, mounted app-level.
         case "ig-extraction-list":
+          return <ExtractionListPanel />;
         case "ig-preview":
+          return <VideoPreviewPanel />;
         case "ig-frame-grid":
+          return <FrameGridPanel />;
         case "ig-brief":
-          return <IgPanelPlaceholder title={PANEL_TITLES[id]} />;
+          return <BriefPanel />;
       }
     },
     [
@@ -829,6 +810,10 @@ function App() {
 
   return (
     <div className="app">
+      {/* Headless Tauri<->store bridge for the IG workspace (events + invoke).
+          Renders nothing; mounted app-level so a run keeps streaming after the
+          'Use as Style Reference' handoff switches workspaces. */}
+      <IGPipelineHost />
       <Toolbar
         onOpenSettings={() => setSettingsOpen(true)}
         onNewProject={() => setNewProjectOpen(true)}

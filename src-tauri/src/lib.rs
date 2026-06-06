@@ -72,6 +72,7 @@ pub fn run() {
             commands::render_toolchain::install_render_toolchain,
             commands::ig_pipeline::ig_extract_phase_a,
             commands::ig_pipeline::ig_extract_phase_b,
+            commands::ig_pipeline::ig_list_extractions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -357,6 +357,25 @@ fn project_dir(app: &AppHandle, slug: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// Throwaway working dir for Phase A's clip/frames/score, keyed by source id.
+///
+/// It MUST live UNDER `extractions/` (here: `extractions/_work/<id>/`) rather than
+/// a project-root sibling, because the frame grid renders these live candidate
+/// frames via `convertFileSrc`, and the Tauri asset-protocol scope only allows
+/// `.../projects/**/extractions/**`. A sibling dir (e.g. `<project>/.ig-work/`)
+/// is OUTSIDE that scope, so the webview would 404 every thumbnail during review.
+///
+/// The name is `_work`, NOT `.work`: on unix the asset scope defaults
+/// `require_literal_leading_dot = true` (tauri scope/fs.rs), so a `**` wildcard
+/// will not match a leading-dot path segment -- a dot-prefixed work dir would
+/// still be blocked. The `_work` dir is skipped by ig_list_extractions (it has no
+/// extraction.md). Phase B's store moves the media into `extractions/<date>_<id>/`
+/// (reading absolute paths from the results blob, so it does not care where work
+/// lives) and then this dir is removed.
+fn ig_work_dir(out_root: &Path, id: &str) -> PathBuf {
+    out_root.join("extractions").join("_work").join(id)
+}
+
 // ---------------------------------------------------------------------------
 // Subprocess helpers
 // ---------------------------------------------------------------------------
@@ -606,7 +625,9 @@ fn phase_a_blocking(
 
     // Throwaway working dir for clip/frames/score; store finalizes into the real
     // extraction folder in Phase B. Keyed by the source id download assigned.
-    let work = out_root.join(".ig-work").join(&download.id);
+    // Lives under extractions/.work so its live frames are within the asset-
+    // protocol scope (see ig_work_dir).
+    let work = ig_work_dir(&out_root, &download.id);
     std::fs::create_dir_all(&work)
         .map_err(|e| format!("failed to create ig working dir: {e}"))?;
     let work_s = work.to_string_lossy().to_string();
@@ -708,7 +729,7 @@ fn phase_b_blocking(
     emit_progress(&app, StageProgress { stage: StageName::Store, progress: 1.0, message: None });
 
     // The working dir's media has been reconciled into the extraction folder; drop it.
-    let _ = std::fs::remove_dir_all(out_root.join(".ig-work").join(&download.id));
+    let _ = std::fs::remove_dir_all(ig_work_dir(&out_root, &download.id));
 
     let brief_result = BriefResult {
         brief: analyze.brief,
@@ -716,4 +737,117 @@ fn phase_b_blocking(
     };
     let _ = app.emit("ig://brief", &brief_result);
     Ok(brief_result)
+}
+
+// ---------------------------------------------------------------------------
+// List past extractions (sidebar)
+// ---------------------------------------------------------------------------
+
+/// One row in the IG sidebar's past-extractions list. Mirrors the frontend
+/// `IGExtractionListItem` (src/types/ig.ts) -- camelCase across the boundary.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractionListItem {
+    /// Source short id (the `<id>` segment of the `<date>_<id>` folder name).
+    pub id: String,
+    /// Extraction date, `YYYY-MM-DD` (the folder name's leading segment).
+    pub date: String,
+    /// Source URL, or null for a local-file extraction.
+    pub source_url: Option<String>,
+    /// Absolute path to a representative frame (first on disk), or null.
+    pub thumbnail_path: Option<String>,
+    /// Absolute path to the extraction folder.
+    pub dir: String,
+}
+
+/// Pull the `source:` value out of an `extraction.md` YAML frontmatter block.
+/// store.ts writes it as a JSON-double-quoted scalar (or the bare `null` keyword),
+/// so unescape via serde_json when quoted; `null`/absent -> None.
+fn parse_source_url(md: &str) -> Option<String> {
+    for line in md.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("source:") {
+            let value = rest.trim();
+            if value.is_empty() || value == "null" {
+                return None;
+            }
+            // store.ts double-quotes via JSON.stringify; round-trip to unescape.
+            if let Ok(s) = serde_json::from_str::<String>(value) {
+                return Some(s);
+            }
+            return Some(value.trim_matches('"').to_string());
+        }
+    }
+    None
+}
+
+/// First `frame_*.jpg` in `frames_dir` by filename order, as an absolute path.
+fn first_frame_path(frames_dir: &Path) -> Option<String> {
+    let mut names: Vec<String> = std::fs::read_dir(frames_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with("frame_") && n.ends_with(".jpg"))
+        .collect();
+    names.sort();
+    names
+        .into_iter()
+        .next()
+        .map(|n| frames_dir.join(n).to_string_lossy().to_string())
+}
+
+/// List a project's past extractions for the sidebar: enumerate
+/// `<project>/extractions/`, and for each `<YYYY-MM-DD>_<id>` folder holding an
+/// `extraction.md`, parse the source URL and pick a thumbnail. Folders without an
+/// `extraction.md` (e.g. the `.work` scratch dir, or an interrupted Phase A) are
+/// skipped, so a half-finished run never shows up as a complete extraction.
+#[tauri::command]
+pub fn ig_list_extractions(app: AppHandle, slug: String) -> Result<Vec<ExtractionListItem>, String> {
+    let extractions_dir = project_dir(&app, &slug)?.join("extractions");
+    if !extractions_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut items = Vec::new();
+    for entry in std::fs::read_dir(&extractions_dir)
+        .map_err(|e| format!("failed to read extractions dir: {e}"))?
+    {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        // Skip dotfiles (the .work scratch dir) and anything not a real extraction.
+        if name.starts_with('.') {
+            continue;
+        }
+        let md_path = dir.join("extraction.md");
+        if !md_path.is_file() {
+            continue;
+        }
+        // Folder name is `<YYYY-MM-DD>_<id>`; the date segment has no underscore,
+        // so split on the FIRST underscore (an id may itself contain underscores).
+        let (date, id) = match name.split_once('_') {
+            Some((d, i)) if !d.is_empty() && !i.is_empty() => (d.to_string(), i.to_string()),
+            _ => continue,
+        };
+        let source_url = std::fs::read_to_string(&md_path)
+            .ok()
+            .and_then(|md| parse_source_url(&md));
+        let thumbnail_path = first_frame_path(&dir.join("frames"));
+
+        items.push(ExtractionListItem {
+            id,
+            date,
+            source_url,
+            thumbnail_path,
+            dir: dir.to_string_lossy().to_string(),
+        });
+    }
+
+    Ok(items)
 }
