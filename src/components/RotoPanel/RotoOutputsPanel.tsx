@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useRotoStore } from "../../store/rotoStore";
 import { useProjectStore } from "../../store/projectStore";
 
@@ -65,6 +66,15 @@ export default function RotoOutputsPanel() {
   const [files, setFiles] = useState<Record<string, RotoOutputFiles>>({});
   const [error, setError] = useState<string | null>(null);
 
+  // Export UX per row: 'idle' | 'picking' (format menu open) | 'exporting'.
+  const [exportState, setExportState] = useState<
+    Record<string, "idle" | "picking" | "exporting">
+  >({});
+  // Per-row export error (shown inline, cleared when export is re-triggered).
+  const [exportError, setExportError] = useState<Record<string, string | null>>({});
+  // Track the unlisten fn for export://progress so we only register once.
+  const exportUnlisten = useRef<(() => void) | null>(null);
+
   const refresh = useCallback(async () => {
     if (!slug) {
       setOutputs([]);
@@ -123,6 +133,60 @@ export default function RotoOutputsPanel() {
       setError(String(err));
     }
   }, []);
+
+  // Register the export://progress listener once on mount so the "Exporting…"
+  // indicator stays visible while the backend is running. Progress 1.0 means
+  // done; we reset the row's state to 'idle' then.
+  useEffect(() => {
+    let cancelled = false;
+    void listen<{ progress: number }>("export://progress", (e) => {
+      if (cancelled) return;
+      if (e.payload.progress >= 1.0) {
+        setExportState((prev) => {
+          const next = { ...prev };
+          for (const k of Object.keys(next)) {
+            if (next[k] === "exporting") next[k] = "idle";
+          }
+          return next;
+        });
+      }
+    }).then((un) => {
+      if (cancelled) un();
+      else exportUnlisten.current = un;
+    });
+    return () => {
+      cancelled = true;
+      exportUnlisten.current?.();
+      exportUnlisten.current = null;
+    };
+  }, []);
+
+  // Trigger the save dialog, then run the export. `dir` is used as the key into
+  // exportState. `name` is the folder stem for the default filename.
+  const startExport = useCallback(
+    async (dir: string, name: string, format: string) => {
+      setExportError((prev) => ({ ...prev, [dir]: null }));
+      setExportState((prev) => ({ ...prev, [dir]: "exporting" }));
+      try {
+        const destPath = await invoke<string>("choose_roto_export_path", {
+          name,
+          format,
+        });
+        if (destPath === "cancelled") {
+          setExportState((prev) => ({ ...prev, [dir]: "idle" }));
+          return;
+        }
+        await invoke("export_roto_output", { dir, format, destPath });
+        // Success: state reset via export://progress 1.0 listener, but also
+        // reset here in case the event fires before this line.
+        setExportState((prev) => ({ ...prev, [dir]: "idle" }));
+      } catch (err) {
+        setExportError((prev) => ({ ...prev, [dir]: String(err) }));
+        setExportState((prev) => ({ ...prev, [dir]: "idle" }));
+      }
+    },
+    [],
+  );
 
   return (
     <div className="roto-outputs">
@@ -189,6 +253,66 @@ export default function RotoOutputsPanel() {
                   >
                     Open video
                   </button>
+                ) : null}
+                {exportState[o.dir] === "exporting" ? (
+                  <span className="roto-outputs__exporting">Exporting...</span>
+                ) : exportState[o.dir] === "picking" ? (
+                  <span
+                    className="roto-outputs__format-picker"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {(["GIF", "MP4", "MOV"] as const).map((fmt) => (
+                      <button
+                        key={fmt}
+                        type="button"
+                        className="roto-outputs__btn roto-outputs__btn--fmt"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void startExport(o.dir, o.name, fmt.toLowerCase());
+                        }}
+                      >
+                        {fmt}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className="roto-outputs__btn"
+                      title="Cancel"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExportState((prev) => ({
+                          ...prev,
+                          [o.dir]: "idle",
+                        }));
+                      }}
+                    >
+                      x
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="roto-outputs__btn"
+                    title="Export as GIF, MP4, or MOV"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExportError((prev) => ({ ...prev, [o.dir]: null }));
+                      setExportState((prev) => ({
+                        ...prev,
+                        [o.dir]: "picking",
+                      }));
+                    }}
+                  >
+                    Export as...
+                  </button>
+                )}
+                {exportError[o.dir] ? (
+                  <span
+                    className="roto-outputs__export-err"
+                    title={exportError[o.dir] ?? ""}
+                  >
+                    !
+                  </span>
                 ) : null}
               </div>
             </li>
@@ -325,5 +449,28 @@ const STYLES = `
 .roto-outputs__frames {
   color: var(--text-faint);
   font-size: 10px;
+}
+.roto-outputs__format-picker {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.roto-outputs__btn--fmt {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.roto-outputs__btn--fmt:hover {
+  background: var(--surface-alt);
+}
+.roto-outputs__exporting {
+  font-size: 10px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+.roto-outputs__export-err {
+  font-size: 10px;
+  color: #fca5a5;
+  font-weight: bold;
+  cursor: default;
 }
 `;

@@ -25,7 +25,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_dialog::DialogExt;
 
 use crate::commands::render_toolchain;
 
@@ -297,6 +298,231 @@ fn next_local_id() -> String {
         .unwrap_or(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{nanos}_{n}")
+}
+
+// ---------------------------------------------------------------------------
+// export_roto_output: convert an output folder to GIF / MP4 / MOV
+// ---------------------------------------------------------------------------
+
+/// Sentinel returned when the user cancels the save dialog — not an error.
+const EXPORT_CANCELLED: &str = "cancelled";
+
+/// Run `ffmpeg -hide_banner -i <webm>` and extract the video width from its
+/// stderr stream info line ("…, 1280x720,…"). Returns `None` if ffmpeg can't
+/// be run or the width can't be parsed (callers fall back to a default).
+fn probe_webm_width(ffmpeg: &Path, webm: &Path) -> Option<u32> {
+    let out = std::process::Command::new(ffmpeg)
+        .args(["-hide_banner", "-i"])
+        .arg(webm)
+        .output()
+        .ok()?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    for line in stderr.lines() {
+        if line.contains("Video:") {
+            for word in line.split_whitespace() {
+                let word = word.trim_end_matches(',');
+                if let Some((w, _h)) = word.split_once('x') {
+                    if w.chars().all(|c| c.is_ascii_digit()) {
+                        if let Ok(width) = w.parse::<u32>() {
+                            return Some(width);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Open a native save dialog for a roto export and return the chosen absolute
+/// path, or `"cancelled"` when the user dismisses the dialog. `name` is the
+/// folder stem (used as the default filename), `format` is "gif", "mp4", or
+/// "mov".
+#[tauri::command]
+pub async fn choose_roto_export_path(
+    app: AppHandle,
+    name: String,
+    format: String,
+) -> Result<String, String> {
+    let (desc, ext): (&str, &str) = match format.to_ascii_lowercase().as_str() {
+        "gif" => ("GIF Image", "gif"),
+        "mp4" => ("MPEG-4 Video", "mp4"),
+        "mov" => ("QuickTime / ProRes", "mov"),
+        other => return Err(format!("unsupported format: {other}")),
+    };
+
+    let default_name = format!("{name}.{ext}");
+    let chosen = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter(desc, &[ext])
+            .set_file_name(&default_name)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|e| format!("save dialog task failed: {e}"))?;
+
+    match chosen {
+        Some(fp) => Ok(fp
+            .into_path()
+            .map_err(|e| format!("invalid save path: {e}"))?
+            .to_string_lossy()
+            .to_string()),
+        None => Ok(EXPORT_CANCELLED.to_string()),
+    }
+}
+
+/// Convert an output folder to a user-chosen format (GIF, MP4, or MOV) and
+/// write the result to `dest_path`. Emits `export://progress` events (0.0 at
+/// start, 0.5 between GIF passes, 1.0 on success). Returns immediately on
+/// success or propagates an error string.
+///
+/// Source preference: `output.webm` in `dir`; falls back to the PNG frame
+/// sequence (`frame_*.png`, 1-based naming) if the WebM is absent.
+#[tauri::command]
+pub fn export_roto_output(
+    app: AppHandle,
+    dir: String,
+    format: String,
+    dest_path: String,
+) -> Result<(), String> {
+    let d = Path::new(&dir);
+    if !d.is_dir() {
+        return Err(format!("not a directory: {dir}"));
+    }
+    if dest_path == EXPORT_CANCELLED {
+        return Ok(()); // user cancelled the dialog — not an error
+    }
+
+    let ffmpeg = resolve_ffmpeg(&app);
+
+    let _ = app.emit("export://progress", serde_json::json!({ "progress": 0.0 }));
+
+    // Determine the effective fps from meta.json for GIF palettegen.
+    let (_, frame_skip) = read_meta(d);
+    let skip = frame_skip.unwrap_or(3);
+    let fps = 30u32 / (skip + 1);
+
+    // Resolve the input source: prefer output.webm, fall back to PNG frames.
+    let webm_path = d.join("output.webm");
+    let use_webm = webm_path.is_file();
+
+    let input_args: Vec<String>;
+    if use_webm {
+        input_args = vec!["-i".to_string(), webm_path.to_string_lossy().to_string()];
+    } else {
+        // Build PNG sequence source (-framerate N -i frame_%04d.png, 1-based).
+        if ordered_frames(d).is_empty() {
+            return Err("no output.webm and no PNG frames found in output folder".to_string());
+        }
+        let pattern = d
+            .join("frame_%04d.png")
+            .to_string_lossy()
+            .to_string();
+        input_args = vec![
+            "-framerate".to_string(),
+            fps.to_string(),
+            "-start_number".to_string(),
+            "1".to_string(),
+            "-i".to_string(),
+            pattern,
+        ];
+    }
+
+    let fmt = format.to_ascii_lowercase();
+    match fmt.as_str() {
+        "gif" => {
+            // Two-pass palettegen.
+            // Probe width for scaling; default to 480 if unavailable.
+            let width = if use_webm {
+                probe_webm_width(&ffmpeg, &webm_path).unwrap_or(480)
+            } else {
+                480u32
+            };
+            let scale = format!("fps={fps},scale={width}:-1:flags=lanczos");
+            let palette = Path::new(&dest_path)
+                .with_extension("palette.png");
+            let palette_s = palette.to_string_lossy().to_string();
+
+            // Pass 1: generate palette
+            let mut args1: Vec<String> = vec!["-y".to_string()];
+            args1.extend(input_args.clone());
+            args1.extend([
+                "-vf".to_string(),
+                format!("{scale},palettegen"),
+                palette_s.clone(),
+            ]);
+            run_ffmpeg(&ffmpeg, &args1, "palettegen")?;
+
+            let _ = app.emit("export://progress", serde_json::json!({ "progress": 0.5 }));
+
+            // Pass 2: apply palette
+            let lavfi = format!("{scale} [x]; [x][1:v] paletteuse");
+            let mut args2: Vec<String> = vec!["-y".to_string()];
+            args2.extend(input_args);
+            args2.extend([
+                "-i".to_string(),
+                palette_s.clone(),
+                "-lavfi".to_string(),
+                lavfi,
+                dest_path.clone(),
+            ]);
+            run_ffmpeg(&ffmpeg, &args2, "gif paletteuse")?;
+
+            // Clean up temp palette.
+            let _ = std::fs::remove_file(&palette);
+        }
+        "mp4" => {
+            let mut args: Vec<String> = vec!["-y".to_string()];
+            args.extend(input_args);
+            args.extend([
+                "-c:v".to_string(),
+                "libx264".to_string(),
+                "-pix_fmt".to_string(),
+                "yuv420p".to_string(),
+                dest_path.clone(),
+            ]);
+            run_ffmpeg(&ffmpeg, &args, "mp4")?;
+        }
+        "mov" => {
+            let mut args: Vec<String> = vec!["-y".to_string()];
+            args.extend(input_args);
+            args.extend([
+                "-c:v".to_string(),
+                "prores_ks".to_string(),
+                "-profile:v".to_string(),
+                "4".to_string(),
+                dest_path.clone(),
+            ]);
+            run_ffmpeg(&ffmpeg, &args, "mov/prores")?;
+        }
+        other => return Err(format!("unsupported format: {other}")),
+    }
+
+    let _ = app.emit("export://progress", serde_json::json!({ "progress": 1.0 }));
+    Ok(())
+}
+
+/// Run ffmpeg with `args`, collecting stderr. On non-zero exit, return the last
+/// 8 stderr lines as an error message.
+fn run_ffmpeg(ffmpeg: &Path, args: &[String], label: &str) -> Result<(), String> {
+    let output = std::process::Command::new(ffmpeg)
+        .args(args)
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                render_toolchain::TOOLCHAIN_MISSING.to_string()
+            } else {
+                format!("failed to launch ffmpeg: {e}")
+            }
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail: Vec<&str> = stderr.lines().rev().take(8).collect();
+        let msg = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+        return Err(format!("ffmpeg {label} failed: {msg}"));
+    }
+    Ok(())
 }
 
 /// Trim a source video to the half-open range [start_secs, end_secs) into a
