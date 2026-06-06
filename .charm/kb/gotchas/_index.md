@@ -4,6 +4,7 @@ Traps, flaky behavior, and non-obvious constraints -- the things that bite you t
 
 | Note | Summary | Status |
 |---|---|---|
+| [rust-raw-string-hex-color-collision](rust-raw-string-hex-color-collision.md) | Seeding TS/CSS with hex colors via a Rust r#"..."# raw string breaks -- the sequence "# inside e.g. "#0B0E14" closes the delimiter early; use r##"..."## (extra hash). | current |
 | [skills-file-has-load-bearing-exemplar-tsx](skills-file-has-load-bearing-exemplar-tsx.md) | remotion-skills.txt now embeds a complete exemplar animation.tsx (the few-shot 'what good looks like' anchor); it must stay a compiling Remotion file or it teaches the model broken patterns -- verify by extracting the block and running tsc against the project's node_modules. | current |
 | [mosaic-drag-swallowed-by-iframe](mosaic-drag-swallowed-by-iframe.md) | react-mosaic tile drags snap back because the preview iframe / Monaco swallow the native HTML5 drag as the cursor crosses them; fix is pointer-events:none on .mosaic-window-body while a `panels--dragging` class is set. | current |
 | [split-drag-state-at-root-not-per-parent](split-drag-state-at-root-not-per-parent.md) | SplitLayout's header drag-to-rearrange keeps its state at the ROOT component (not per-ParentNode like resize) because a drag spans the whole tree; it captures the header pointer for the 4px threshold then RELEASES capture and hands off to a fixed full-viewport shield so the preview iframe / Monaco never swallow the move stream. | current |

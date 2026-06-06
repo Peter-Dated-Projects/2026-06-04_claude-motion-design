@@ -143,6 +143,83 @@ pub struct AssetFile {
 /// Everything else under the project dir is treated as editable source.
 const NON_SOURCE: [&str; 4] = ["project.json", "conversation.json", "assets", "chats"];
 
+// --- scaffolded design-token files ------------------------------------------
+
+/// Seeded into every new project alongside animation.tsx. These mirror the
+/// shared-file API the skills prompt documents (remotion-skills.txt Section 10):
+/// `theme.ts` carries the Midnight Pop palette + font stacks, `motion.ts` the
+/// named spring presets + fade/exit/float helpers. animation.tsx is free to
+/// `import { P, DISPLAY, BODY } from './theme'` / `import { SNAPPY, fadeIn }
+/// from './motion'`; the preview compiler resolves those relative imports in
+/// bundle mode. Plain object literals (no SpringConfig annotation) so nothing
+/// type-only survives the transform. Existing projects are NOT migrated.
+const THEME_TS: &str = r##"// Design tokens for this project. Edit freely -- animation.tsx imports from here.
+// Palette: Midnight Pop. Fonts: Bold Impact (display) + Neutral Modern (body).
+
+export const P = {
+  bg: "#0B0E14",
+  surface: "#161B26",
+  accent: "#4F8CFF",
+  accentSoft: "#1E2A44",
+  ink: "#F5F7FA",
+  muted: "#8A94A6",
+};
+
+// Bold Impact / Grotesk -- hooks, headlines (pair with weight 800-900).
+export const DISPLAY = '"Helvetica Neue", Helvetica, Arial, sans-serif';
+
+// Neutral Modern -- body text, captions.
+export const BODY =
+  '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+"##;
+
+const MOTION_TS: &str = r#"// Motion presets + helpers for this project. Edit freely -- animation.tsx imports from here.
+import { interpolate, Easing } from "remotion";
+
+// Named spring configs. Pass to spring({ frame, fps, config: SNAPPY }).
+export const SNAPPY = { mass: 1, damping: 18, stiffness: 200 }; // fast, ~7% overshoot -- primary element arriving
+export const SMOOTH_SETTLE = { mass: 1, damping: 22, stiffness: 120 }; // no overshoot, calm -- body text, captions
+export const EMPHASIS_POP = { mass: 1, damping: 14, stiffness: 260 }; // ~20% overshoot -- one focal CTA / number
+export const HEAVY_DROP = { mass: 1.8, damping: 25, stiffness: 180 }; // weighty -- logo slam, cards
+export const QUICK_TICK = { mass: 0.6, damping: 12, stiffness: 240 }; // tiny fast snap -- small UI accents
+
+// Fade in over `dur` frames starting at `startFrame`. Returns opacity 0..1.
+export function fadeIn(frame: number, startFrame: number, dur: number): number {
+  return interpolate(frame, [startFrame, startFrame + dur], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.cubic),
+  });
+}
+
+// Accelerating exit over the last ~14 frames: fades to 0 and slides up to -30px.
+export function softExit({
+  frame,
+  durationInFrames,
+}: {
+  frame: number;
+  durationInFrames: number;
+}): { opacity: number; translateY: number } {
+  const exitStart = durationInFrames - 14;
+  const opacity = interpolate(frame, [exitStart, durationInFrames], [1, 0], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.in(Easing.cubic),
+  });
+  const translateY = interpolate(frame, [exitStart, durationInFrames], [0, -30], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.in(Easing.cubic),
+  });
+  return { opacity, translateY };
+}
+
+// Gentle ambient bob: 0.35Hz sine, +/-10px. Returns translateY.
+export function gentleFloat(frame: number, fps: number): number {
+  return Math.sin((frame / fps) * Math.PI * 2 * 0.35) * 10;
+}
+"#;
+
 // --- path helpers -----------------------------------------------------------
 
 /// {documentDir}/ClaudeMotion/projects, created if missing. Resolved via Tauri's
@@ -258,6 +335,11 @@ pub fn create_project(app: AppHandle, name: String) -> Result<Project, String> {
         .map_err(|e| format!("failed to seed animation.tsx: {e}"))?;
     fs::write(dir.join("conversation.json"), "[]")
         .map_err(|e| format!("failed to seed conversation.json: {e}"))?;
+    // Seed shared design-token files so animation.tsx can import './theme' / './motion'.
+    fs::write(dir.join("theme.ts"), THEME_TS)
+        .map_err(|e| format!("failed to seed theme.ts: {e}"))?;
+    fs::write(dir.join("motion.ts"), MOTION_TS)
+        .map_err(|e| format!("failed to seed motion.ts: {e}"))?;
 
     Ok(project)
 }
