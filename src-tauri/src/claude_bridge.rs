@@ -47,7 +47,17 @@ pub fn claude_path_override(app: &AppHandle) -> Option<String> {
 // creates an implicit rebuild dependency, and build.rs adds explicit
 // `rerun-if-changed` directives for them as well.
 const MCP_CONFIG_CONTENTS: &str = include_str!("../resources/remotion-mcp-config.json");
+// The skills prompt is delivered as the concatenation of two embedded sources:
+// the main animation skills and the image-reference skills. They are joined at
+// materialize time (see `ensure_claude_config`) into the single `SKILLS_FILE`,
+// which `pty_bridge.rs` passes to the CLI via one `--append-system-prompt-file`.
 const SKILLS_CONTENTS: &str = include_str!("../resources/remotion-skills.txt");
+const IMAGE_SKILLS_CONTENTS: &str = include_str!("../resources/remotion-image-skills.txt");
+
+/// Labelled divider inserted between the main and image skill sections in the
+/// combined skills file, so the CLI reads two distinct blocks rather than one
+/// run-on document. Chosen to not appear verbatim in either source file.
+const SKILLS_SECTION_DIVIDER: &str = "===== APPENDED SKILL MODULE: IMAGE REFERENCE =====";
 
 // ---- Config / path helpers ------------------------------------------------
 
@@ -99,14 +109,28 @@ fn write_if_changed(path: &std::path::Path, contents: &str, label: &str) -> Resu
 /// silently never reach them. Comparing against the embedded const and rewriting
 /// on change ships those fixes on the next launch while leaving an up-to-date
 /// file untouched. Only these two app-managed files are written; no user-owned
-/// state in the dir is touched.
+/// state in the dir is touched. The skills file is the runtime concatenation of
+/// the main and image-reference skill sources (joined by `SKILLS_SECTION_DIVIDER`),
+/// still materialized as the single `SKILLS_FILE`.
 pub fn ensure_claude_config(app: &AppHandle) -> Result<(), String> {
     let dir = claude_config_dir(app)?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create claude-config dir: {e}"))?;
 
+    // Normalize the seam: drop any trailing newlines from the main section, then
+    // rejoin with a clean blank-line boundary so the last main line never fuses
+    // with the divider regardless of how `remotion-skills.txt` ends. Pure const
+    // concatenation -> deterministic, so `write_if_changed` still no-ops when
+    // unchanged and rewrites whenever either embedded source changes.
+    let combined = format!(
+        "{}\n\n{}\n\n{}",
+        SKILLS_CONTENTS.trim_end_matches('\n'),
+        SKILLS_SECTION_DIVIDER,
+        IMAGE_SKILLS_CONTENTS,
+    );
+
     write_if_changed(&dir.join(MCP_CONFIG_FILE), MCP_CONFIG_CONTENTS, MCP_CONFIG_FILE)?;
-    write_if_changed(&dir.join(SKILLS_FILE), SKILLS_CONTENTS, SKILLS_FILE)?;
+    write_if_changed(&dir.join(SKILLS_FILE), &combined, SKILLS_FILE)?;
 
     Ok(())
 }
