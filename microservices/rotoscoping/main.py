@@ -105,6 +105,13 @@ async def health() -> dict:
     }
 
 
+def _write_upload(src, dest: Path) -> None:
+    """Copy an uploaded file's bytes to dest. Run via asyncio.to_thread so the
+    blocking disk write never stalls the event loop."""
+    with dest.open("wb") as out:
+        shutil.copyfileobj(src, out)
+
+
 def _zip_output(output_dir: Path, zip_path: Path) -> None:
     """Zip every PNG in output_dir (sorted) into zip_path."""
     pngs = sorted(output_dir.glob("frame_*.png"))
@@ -173,12 +180,12 @@ async def rotoscope(
         shutil.rmtree(work_dir, ignore_errors=True)
 
     try:
-        # Persist the upload.
-        with video_path.open("wb") as out:
-            shutil.copyfileobj(video.file, out)
+        # Persist the upload (off the event loop -- blocking disk write).
+        await asyncio.to_thread(_write_upload, video.file, video_path)
 
         # Enforce the clip-length cap (last line of defence; client caps too).
-        duration, _fps = ffmpeg_helper.probe_video(video_path)
+        # probe_video is a synchronous subprocess.run, so run it in a thread too.
+        duration, _fps = await asyncio.to_thread(ffmpeg_helper.probe_video, video_path)
         if duration > config.MAX_VIDEO_SECONDS:
             raise HTTPException(
                 status_code=400,
@@ -239,7 +246,16 @@ async def rotoscope(
 async def progress(job_id: str) -> StreamingResponse:
     async def event_stream():
         # Tolerate the client subscribing before the POST registers the job.
-        job = registry.wait_for_job(job_id, timeout=10.0)
+        # Poll asynchronously rather than busy-waiting: registry.wait_for_job is a
+        # blocking time.sleep loop that would freeze the single event loop for the
+        # whole timeout, preventing the POST coroutine from ever registering the
+        # job. registry.get is a quick lock acquire and is safe on the loop; only
+        # the sleep must yield control (await), so the POST can run concurrently.
+        deadline = asyncio.get_running_loop().time() + 10.0
+        job = registry.get(job_id)
+        while job is None and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.1)
+            job = registry.get(job_id)
         if job is None:
             payload = json.dumps({"stage": "error", "error": "job not found"})
             yield f"data: {payload}\n\n"
