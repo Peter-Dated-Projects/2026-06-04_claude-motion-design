@@ -35,3 +35,16 @@ explicit = true
 [tool.uv]
 # SAM2's build reaches for torch at build time; allow uv to see it.
 no-build-isolation-package = ["sam-2"]
+
+# SAM2's build backend (setuptools) imports torch at build time but SAM2 never
+# declares setuptools/wheel as build requirements. Because uv must build SAM2's
+# metadata during resolution -- before any runtime deps are installed -- listing
+# setuptools/wheel as runtime deps does NOT make them available to that build.
+# extra-build-dependencies injects them directly into SAM2's build environment,
+# which is the only thing that works here.
+#
+# NOTE: in uv 0.9.x this is a *preview* feature. It is ignored (with a warning)
+# unless the `extra-build-dependencies` preview feature is enabled -- runners set
+# UV_PREVIEW_FEATURES=extra-build-dependencies (see frieren.sh / start.bat).
+[tool.uv.extra-build-dependencies]
+sam-2 = ["setuptools", "wheel"]
