@@ -1,0 +1,11 @@
+# Downloaded SAM2 checkpoints (~900MB) -- fetched on first run, never committed.
+models/
+# Bundled ffmpeg.exe downloaded on Windows when not already on PATH.
+bin/
+# Per-job scratch (extracted frames, partial output) and text logs.
+.work/
+logs/
+# Python
+__pycache__/
+*.pyc
+.venv/

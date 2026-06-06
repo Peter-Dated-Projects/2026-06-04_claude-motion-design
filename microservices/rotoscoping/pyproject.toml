@@ -1,0 +1,37 @@
+[project]
+name = "rotoscoping"
+version = "0.1.0"
+description = "SAM2 rotoscoping microservice for ClaudeMotion -- extracts a subject from video as a transparent PNG sequence on a local CUDA GPU."
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "python-multipart>=0.0.9",
+    "pillow>=10.0",
+    "numpy>=1.26",
+    # PyTorch from the CUDA 12.8 wheel index (see [tool.uv.sources] below) --
+    # required for Blackwell sm_120; the default PyPI wheels do NOT support it.
+    "torch>=2.7",
+    "torchvision>=0.22",
+    # SAM2 video predictor, installed from the upstream repo. The importable
+    # package is `sam2`. Pinned to a commit-less branch ref for reproducibility;
+    # bump deliberately and re-verify the model/config names in config.py.
+    "sam-2",
+]
+
+# torch/torchvision must come from the CUDA 12.8 index, not PyPI. `explicit = true`
+# means ONLY the packages mapped in [tool.uv.sources] are pulled from this index;
+# everything else still resolves from PyPI.
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+sam-2 = { git = "https://github.com/facebookresearch/sam2.git" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv]
+# SAM2's build reaches for torch at build time; allow uv to see it.
+no-build-isolation-package = ["sam-2"]
