@@ -1,20 +1,22 @@
 """Per-job state, keyed by a CLIENT-SUPPLIED job_id.
 
-Why client-supplied: POST /rotoscope runs the job synchronously and returns the
-ZIP, so the client cannot learn a server-assigned id in time to subscribe to
-progress. Instead the client generates the id, opens the SSE stream on it, then
-POSTs with the same id. The SSE side tolerates the race where it subscribes
-before the POST registers the job (see `wait_for_job`).
+Why client-supplied: the client generates the id, opens the SSE progress stream
+on it, then POSTs with the same id. POST /rotoscope launches the job in the
+background and returns 202 immediately; progress flows over SSE and the result
+ZIP is fetched separately from /rotoscope/{job_id}/result. The SSE side tolerates
+the race where it subscribes before the POST registers the job by polling
+`registry.get` against a short deadline.
 
 Concurrency model: there is ONE GPU, so jobs are serialized by `GPU_LOCK`. Each
 Job carries a threading.Event the propagation loop polls to honour cancellation,
-and a lock guarding its mutable progress snapshot.
+and a lock guarding its mutable progress snapshot. `zip_path` is set by the
+background finalizer once the output ZIP is written, and read by the /result
+endpoint.
 """
 
 from __future__ import annotations
 
 import threading
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -38,6 +40,7 @@ class Job:
     error: Optional[str] = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
     work_dir: Optional[Path] = None
+    zip_path: Optional[Path] = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def update(
@@ -110,21 +113,6 @@ class JobRegistry:
     def remove(self, job_id: str) -> None:
         with self._lock:
             self._jobs.pop(job_id, None)
-
-    def wait_for_job(self, job_id: str, timeout: float = 10.0) -> Optional[Job]:
-        """Return the Job, waiting up to `timeout`s for it to be registered.
-
-        Tolerates the SSE-subscribes-before-POST race: the progress endpoint
-        may open before the POST handler calls register().
-        """
-        deadline = time.monotonic() + timeout
-        while True:
-            job = self.get(job_id)
-            if job is not None:
-                return job
-            if time.monotonic() >= deadline:
-                return None
-            time.sleep(0.05)
 
 
 # Module-level singleton shared across the app.
