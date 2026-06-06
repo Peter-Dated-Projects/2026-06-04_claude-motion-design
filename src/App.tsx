@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -282,6 +282,12 @@ function App() {
   // non-entry files the user has opened in a tab.
   const [files, setFiles] = useState<ProjectFile[]>([]);
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
+  // The COMPLETE content of every non-entry `.ts`/`.tsx` file, fed to the preview
+  // compiler so relative imports (`./theme`, `./components/X`) resolve at preview
+  // time. Distinct from `fileContents` (which is lazy -- only tabs the user opened);
+  // this must hold ALL of them for the bundle. The entry file (animation.tsx) is
+  // `code`, combined into the map below.
+  const [previewFiles, setPreviewFiles] = useState<Record<string, string>>({});
 
   const activeFile = useUIStore((s) => s.activeFile);
   const resetEditorFiles = useUIStore((s) => s.resetEditorFiles);
@@ -357,6 +363,27 @@ function App() {
     [handleCodeChange, pushToast],
   );
 
+  // Read the COMPLETE set of non-entry `.ts`/`.tsx` files for the preview compiler.
+  // Re-listing from disk (rather than diffing event paths) makes add / delete / rename
+  // self-correcting: a removed file simply drops out of the list, so the map never
+  // carries a stale entry. The entry file is excluded here -- it's `code`.
+  const loadPreviewFiles = useCallback(
+    async (slug: string): Promise<Record<string, string>> => {
+      const list = await invoke<ProjectFile[]>("list_project_files", { slug });
+      const targets = list.filter(
+        (f) => !f.isDir && /\.tsx?$/.test(f.path) && f.path !== ENTRY_FILE,
+      );
+      const entries = await Promise.all(
+        targets.map(
+          async (f) =>
+            [f.path, await invoke<string>("read_file", { slug, path: f.path })] as const,
+        ),
+      );
+      return Object.fromEntries(entries);
+    },
+    [],
+  );
+
   // --- Startup: check the CLI, load projects, reopen the last one -------------------
   useEffect(() => {
     void (async () => {
@@ -413,8 +440,9 @@ function App() {
   useEffect(() => {
     const slug = activeProject?.slug;
     // A new project starts with just the entry tab open; drop any cached
-    // non-entry content from the previous project.
+    // non-entry content (editor tabs + preview map) from the previous project.
     setFileContents({});
+    setPreviewFiles({});
     resetEditorFiles(ENTRY_FILE);
     if (!slug) {
       setFiles([]);
@@ -434,10 +462,20 @@ function App() {
           });
         }
       });
+    // Load the full non-entry source map so the preview can resolve relative imports
+    // immediately, before any edit.
+    loadPreviewFiles(slug)
+      .then((map) => {
+        if (!cancelled) setPreviewFiles(map);
+      })
+      .catch(() => {
+        // Non-fatal: a single-file animation.tsx still previews from `code`.
+        if (!cancelled) setPreviewFiles({});
+      });
     return () => {
       cancelled = true;
     };
-  }, [activeProject?.slug, resetEditorFiles, pushToast]);
+  }, [activeProject?.slug, resetEditorFiles, pushToast, loadPreviewFiles]);
 
   // --- Lazily load a non-entry file's content when its tab becomes active ------------
   // The entry file's content is `code` (mirrored by the watcher); other files are
@@ -463,10 +501,12 @@ function App() {
     };
   }, [activeFile, activeProject?.slug, fileContents, pushToast]);
 
-  // --- Watch animation.tsx on disk: it is the display source of truth ---------------
-  // Both the user (Monaco) and Claude (terminal) write this file; the backend
-  // file watcher emits its latest contents and we mirror them into `code`, which
-  // flows to the editor and preview. This replaces the old chat onCodeGenerated.
+  // --- Watch the project's .ts/.tsx on disk: the display + preview source of truth ---
+  // Both the user (Monaco) and Claude (terminal) write these files; the backend file
+  // watcher emits the set of changed project-relative paths after a debounced burst.
+  // animation.tsx flows into `code` (editor + preview entry); every other .ts/.tsx is
+  // re-read into the preview map so relative imports resolve. This replaces the old
+  // chat onCodeGenerated.
   useEffect(() => {
     const slug = activeProject?.slug;
     if (!slug) return;
@@ -474,8 +514,29 @@ function App() {
     let unlisten: (() => void) | undefined;
     let disposed = false;
 
-    void listen<{ code: string }>("animation://changed", (event) => {
-      setCode(event.payload.code);
+    void listen<{ paths: string[] }>("animation://changed", (event) => {
+      if (disposed) return;
+      const paths = event.payload.paths ?? [];
+      // Entry file changed -> refresh `code` (editor mirror + preview entry).
+      if (paths.includes(ENTRY_FILE)) {
+        invoke<string>("load_animation", { slug })
+          .then((src) => {
+            if (!disposed) setCode(src);
+          })
+          .catch(() => {});
+      }
+      // Any non-entry .ts/.tsx changed (added / edited / deleted) -> rebuild the
+      // full preview map from disk so add/delete are self-correcting.
+      const nonEntryChanged = paths.some(
+        (p) => p !== ENTRY_FILE && /\.tsx?$/.test(p),
+      );
+      if (nonEntryChanged) {
+        loadPreviewFiles(slug)
+          .then((map) => {
+            if (!disposed) setPreviewFiles(map);
+          })
+          .catch(() => {});
+      }
     }).then((un) => {
       if (disposed) un();
       else unlisten = un;
@@ -492,7 +553,7 @@ function App() {
       disposed = true;
       unlisten?.();
     };
-  }, [activeProject?.slug, pushToast]);
+  }, [activeProject?.slug, pushToast, loadPreviewFiles]);
 
   // --- Window title + remember the last project -------------------------------------
   useEffect(() => {
@@ -616,6 +677,14 @@ function App() {
   const contentLoading =
     !!activeFile && activeFile !== ENTRY_FILE && !(activeFile in fileContents);
 
+  // Complete snapshot handed to the preview compiler: every non-entry .ts/.tsx plus the
+  // live entry (`code`, the editor's source of truth). Memoized so unrelated re-renders
+  // don't change identity and trigger needless recompiles.
+  const previewFileMap = useMemo(
+    () => ({ ...previewFiles, [ENTRY_FILE]: code }),
+    [previewFiles, code],
+  );
+
   const renderPanel = useCallback(
     (id: PanelId) => {
       switch (id) {
@@ -631,10 +700,10 @@ function App() {
             />
           );
         case "preview":
-          return <PreviewPanel code={code} />;
+          return <PreviewPanel files={previewFileMap} />;
       }
     },
-    [code, files, activeContent, contentLoading, handleContentChange],
+    [previewFileMap, files, activeContent, contentLoading, handleContentChange],
   );
 
   return (

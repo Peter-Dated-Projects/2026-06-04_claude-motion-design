@@ -3,16 +3,22 @@ id: esbuild-wasm-no-concurrent-transform
 root: gotchas
 type: gotcha
 status: current
-summary: "esbuild-wasm with worker:false can DEADLOCK on overlapping transform calls, so the sandbox compiler must single-flight transforms; the preview also needs a generation-tagged watchdog so a missing compile/render reply can't strand the overlay on 'Compiling preview...' forever."
+summary: "esbuild-wasm with worker:false can DEADLOCK on overlapping compile calls (transform OR build), so the sandbox compiler must single-flight them; the preview also needs a generation-tagged watchdog so a missing compile/render reply can't strand the overlay on 'Compiling preview...' forever."
 created: 2026-06-04
-updated: 2026-06-04
+updated: 2026-06-06
 related: esbuild-wasm-init-fetch-and-timeout
 ---
 
 `src/workers/sandbox-compiler.worker.ts` runs esbuild-wasm with `worker:false`,
 i.e. one wasm instance on the worker's single thread. That instance is NOT safe
-for concurrent `esbuild.transform` calls -- two in flight at once can DEADLOCK,
-and the second compile then never posts a `compiled` or `error` reply.
+for concurrent compile calls -- two in flight at once can DEADLOCK, and the
+second compile then never posts a `compiled` or `error` reply.
+
+NOTE (T-067): the worker now calls `esbuild.build` (multi-file bundle via a
+virtual-FS plugin), not `esbuild.transform`. `build()` is the SAME single-wasm-
+instance call, so the single-flight `pending`/`processing`/`drain` guard below
+still applies unchanged -- do NOT add a second concurrent `build()` path. See
+[[0006-multi-file-preview-virtual-fs]].
 
 This is the trigger for the "preview stuck on Compiling preview... forever" bug
 (T-034) on *updates* (first load usually works). When Claude makes several edits

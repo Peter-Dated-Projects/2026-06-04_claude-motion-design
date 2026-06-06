@@ -21,6 +21,7 @@ import {
   useRenderLogStore,
   selectErrorCount,
 } from "../../store/renderLogStore";
+import { ENTRY_FILE } from "../CodePanel/CodePanel";
 
 const PLATFORM_OPTIONS: { value: SafeZonePlatform; label: string }[] = [
   { value: "universal", label: "Universal" },
@@ -190,16 +191,36 @@ const COLD_WATCHDOG_MS = 13_000;
 const WARM_WATCHDOG_MS = 5_000;
 
 interface PreviewPanelProps {
-  /** Current animation source, owned by the parent (App). Empty/undefined before a
-   *  project is open -> falls back to SAMPLE_CODE so the preview is never blank. */
+  /** The project's complete `.ts`/`.tsx` snapshot, keyed by project-relative path
+   *  (`animation.tsx`, `theme.ts`, `components/X.tsx`), owned by the parent (App).
+   *  The compiler bundles from `animation.tsx`, resolving relative imports against
+   *  this map. Empty/missing entry before a project is open -> falls back to
+   *  SAMPLE_CODE so the preview is never blank. */
+  files?: Record<string, string>;
+  /** Legacy single-file source: just `animation.tsx`'s contents. Callers that don't
+   *  assemble the full map (e.g. RenderModal's render-preview) pass this; it's wrapped
+   *  into a one-entry map. Ignored when `files` is provided. NOTE: a single-file caller
+   *  cannot preview an animation that imports relative project files -- pass `files`
+   *  for multi-file support. */
   code?: string;
 }
 
-function PreviewPanel({ code }: PreviewPanelProps) {
+function PreviewPanel({ files, code }: PreviewPanelProps) {
   // Pre-built once; future code edits only re-post a compiled bundle, not a new srcdoc.
   const srcDoc = useMemo(buildSrcDoc, []);
 
-  const source = code && code.trim().length > 0 ? code : SAMPLE_CODE;
+  // The file map handed to the compiler. Prefer the full `files` map; fall back to the
+  // legacy single-file `code`. When no project is open (no entry file, or an empty one),
+  // fall back to a single-file sample so the preview is never blank. Memoized so an
+  // unrelated re-render doesn't change identity and trigger a needless recompile.
+  const source = useMemo<Record<string, string>>(() => {
+    const map = files ?? (code !== undefined ? { [ENTRY_FILE]: code } : {});
+    const entry = map[ENTRY_FILE];
+    if (!entry || entry.trim().length === 0) {
+      return { [ENTRY_FILE]: SAMPLE_CODE };
+    }
+    return map;
+  }, [files, code]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   // Shown alongside the timeout error: lets the user re-kick a compile when the
@@ -269,7 +290,12 @@ function PreviewPanel({ code }: PreviewPanelProps) {
     setCanRetry(false);
     setIsLoading(true);
     logAdd("info", "compile", "Compiling animation...");
-    workerRef.current?.postMessage({ type: "compile", code: source, id: gen });
+    workerRef.current?.postMessage({
+      type: "compile",
+      files: source,
+      entry: ENTRY_FILE,
+      id: gen,
+    });
     // Cold tier until the first bundle proves esbuild is initialized; tight after.
     const watchdogMs = warmedUpRef.current ? WARM_WATCHDOG_MS : COLD_WATCHDOG_MS;
     watchdogRef.current = setTimeout(() => {
