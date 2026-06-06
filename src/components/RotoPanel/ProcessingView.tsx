@@ -5,7 +5,8 @@ import { useRotoStore } from "../../store/rotoStore";
  * `rotoStore.progress` (fed from the `roto://progress` event at the app boundary).
  *
  * Stage labelling mirrors the proposal's wording:
- *   Uploading... / Segmenting (n / total)... / Packaging...
+ *   Uploading... / Extracting Frames... / Loading Model... /
+ *   Rotoscoping (n / total)... / Packaging...
  * The `uploading` phase has no tick yet (the clip is still being sent), so its
  * label comes from the phase rather than a progress payload.
  *
@@ -71,12 +72,14 @@ function stageLabel(
   const stage = progress?.stage ?? "";
   switch (stage) {
     case "loading":
-      return "Loading model...";
+      return "Loading Model...";
+    case "extracting":
+      return "Extracting Frames...";
     case "segmenting":
       if (progress?.framesTotal != null) {
-        return `Segmenting (${progress.framesDone ?? 0} / ${progress.framesTotal} frames)...`;
+        return `Rotoscoping (${progress.framesDone ?? 0} / ${progress.framesTotal} frames)...`;
       }
-      return "Segmenting...";
+      return "Rotoscoping...";
     case "packaging":
       return "Packaging...";
     case "done":
