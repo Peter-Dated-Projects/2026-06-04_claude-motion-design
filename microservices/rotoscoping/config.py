@@ -73,23 +73,25 @@ for _d in (MODELS_DIR, BIN_DIR, WORK_DIR, LOGS_DIR):
 # --- SAM2 model ------------------------------------------------------------
 
 # VERIFY: these three must agree with the installed `sam2` package version.
-# The proposal pins the original SAM2 "large" release; if you bump sam-2 in
-# pyproject.toml to a 2.1 build, switch all three together (e.g.
-# sam2.1_hiera_large.pt + configs/sam2.1/sam2.1_hiera_l.yaml + the 092824 URL).
+# Default is the original SAM2 "base_plus" release -- one size below large:
+# smaller checkpoint, lower VRAM, faster, at some cost to fine-edge mask quality.
+# Override ROTO_SAM2_* to switch models, but move all three together (e.g. to go
+# back to large: sam2_hiera_large.pt + configs/sam2/sam2_hiera_l.yaml + the
+# .../072824/sam2_hiera_large.pt URL; a 2.1 build uses the 092824 URL + sam2.1 names).
 SAM2_CHECKPOINT_NAME: str = os.environ.get(
-    "ROTO_SAM2_CHECKPOINT", "sam2_hiera_large.pt"
+    "ROTO_SAM2_CHECKPOINT", "sam2_hiera_base_plus.pt"
 )
 # Hydra config name resolved from inside the installed sam2 package (hydra is
 # initialized with config module "sam2", so this path is relative to the package
-# root). Note the config is named with the short size code `_l`, NOT `_large`
-# like the checkpoint, and lives under `configs/sam2/`. The 2.1 build uses
-# `configs/sam2.1/sam2.1_hiera_l.yaml`. Keep it in lockstep with the checkpoint.
+# root). Note the config uses the short size code `b+`, NOT `base_plus` like the
+# checkpoint, and lives under `configs/sam2/`. The 2.1 build uses
+# `configs/sam2.1/sam2.1_hiera_b+.yaml`. Keep it in lockstep with the checkpoint.
 SAM2_CONFIG_NAME: str = os.environ.get(
-    "ROTO_SAM2_CONFIG", "configs/sam2/sam2_hiera_l.yaml"
+    "ROTO_SAM2_CONFIG", "configs/sam2/sam2_hiera_b+.yaml"
 )
 SAM2_CHECKPOINT_URL: str = os.environ.get(
     "ROTO_SAM2_CHECKPOINT_URL",
-    "https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt",
+    "https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_base_plus.pt",
 )
 
 # Short label reported by /health and stored in each job's meta.json. Derived

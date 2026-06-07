@@ -22,6 +22,8 @@ import IGPipelineHost from "./components/IGWorkspace/useIGPipeline";
 import RotoVideoPanel from "./components/RotoPanel/RotoVideoPanel";
 import RotoAssetsPanel from "./components/RotoPanel/RotoAssetsPanel";
 import RotoOutputsPanel from "./components/RotoPanel/RotoOutputsPanel";
+import RotoJobQueueOverlay from "./components/RotoPanel/RotoJobQueueOverlay";
+import { RotoJobQueueProvider } from "./hooks/useRotoJobQueue";
 import Onboarding, { type OnboardingPhase } from "./components/Onboarding";
 import Settings from "./components/Settings";
 import RenderModal from "./components/RenderModal";
@@ -869,6 +871,7 @@ function App() {
   );
 
   return (
+    <RotoJobQueueProvider>
     <div className="app">
       {/* Headless Tauri<->store bridge for the IG workspace (events + invoke).
           Renders nothing; mounted app-level so a run keeps streaming after the
@@ -930,7 +933,11 @@ function App() {
       />
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
+
+      {/* Floating rotoscope job-queue card stack (bottom-left, over everything). */}
+      <RotoJobQueueOverlay />
     </div>
+    </RotoJobQueueProvider>
   );
 }
 
