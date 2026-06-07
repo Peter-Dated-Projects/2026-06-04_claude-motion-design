@@ -18,7 +18,9 @@
 //!       Never errors. Unreachable service is a NORMAL state (the workspace just
 //!       hides), so this returns `available: false` rather than an Err.
 //!   - `rotoscope_video(app, slug, host, sourcePath, jobId, startFrame, points,
-//!       frameSkip, compress, quality) -> RotoscopeResult`
+//!       frameSkip, compress, quality, modelSize?) -> RotoscopeResult`
+//!       `modelSize` is an optional per-job SAM2 size override; when omitted the
+//!       service keeps its launched/resident size (no multipart field is sent).
 //!       Clips the source from startFrame to end with the bundled ffmpeg, POSTs
 //!       the clip (registering the job under the client-supplied `jobId`), drives
 //!       the SSE stream to completion, fetches the result ZIP and unpacks it into
@@ -523,6 +525,7 @@ fn build_multipart(
     points_json: &str,
     frame_skip: u32,
     job_id: &str,
+    model_size: Option<&str>,
 ) -> (Vec<u8>, String) {
     let boundary = format!("----claudemotion{}", next_local_id());
     let mut body = Vec::with_capacity(video.len() + 512);
@@ -538,6 +541,11 @@ fn build_multipart(
     field("points", points_json);
     field("frame_skip", &frame_skip.to_string());
     field("job_id", job_id);
+    // Per-job model-size override. Only sent when the caller supplied one; absent
+    // means the service uses its launched/resident size (decision 5, backwards-compat).
+    if let Some(size) = model_size {
+        field("model_size", size);
+    }
 
     // The binary video part.
     body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
@@ -569,6 +577,7 @@ pub async fn rotoscope_video(
     frame_skip: u32,
     compress: bool,
     quality: u32,
+    model_size: Option<String>,
 ) -> Result<RotoscopeResult, String> {
     let project = project_dir(&app, &slug)?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -583,6 +592,7 @@ pub async fn rotoscope_video(
             frame_skip,
             compress,
             quality,
+            model_size,
         )
     })
     .await
@@ -601,6 +611,7 @@ fn rotoscope_blocking(
     frame_skip: u32,
     compress: bool,
     quality: u32,
+    model_size: Option<String>,
 ) -> Result<RotoscopeResult, String> {
     // 1. Clip the source to a temp file with the bundled ffmpeg. `clip_id` names
     //    only the scratch file; the JOB identity is the client-supplied `job_id`.
@@ -617,7 +628,8 @@ fn rotoscope_blocking(
             .map_err(|e| format!("failed to read clipped video: {e}"))?;
         let points_json = serde_json::to_string(&points)
             .map_err(|e| format!("failed to serialize points: {e}"))?;
-        let (body, boundary) = build_multipart(&video, &points_json, frame_skip, &job_id);
+        let (body, boundary) =
+            build_multipart(&video, &points_json, frame_skip, &job_id, model_size.as_deref());
 
         let client = reqwest::blocking::Client::builder()
             .build()
