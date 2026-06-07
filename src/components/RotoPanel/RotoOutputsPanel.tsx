@@ -27,6 +27,9 @@ interface RotoOutput {
   dir: string;
   source: string | null;
   frameSkip: number | null;
+  /** Probed source fps from meta.json, or null (older outputs / not yet
+   *  recorded by the bridge -> falls back to the 30fps estimate). */
+  sourceFps: number | null;
   frameCount: number;
   thumbnail: string | null;
   frames: string[];
@@ -47,10 +50,12 @@ interface RotoOutputFiles {
 const ASSUMED_FPS = 30;
 
 /** Effective stop-motion fps for an output: source fps / (frame_skip + 1).
- *  frame_skip falls back to the proposal default (3) when meta.json is absent. */
-function effectiveFps(frameSkip: number | null): number {
-  const skip = frameSkip ?? 3;
-  return ASSUMED_FPS / (skip + 1);
+ *  `sourceFps` is the probed source rate from meta.json; it falls back to the
+ *  30fps assumption when null (older outputs, or before the bridge records it).
+ *  `frameSkip` falls back to the proposal default (3) when meta.json is absent. */
+function effectiveFps(frameSkip: number | null, sourceFps: number | null): number {
+  const fps = sourceFps ?? ASSUMED_FPS;
+  return fps / ((frameSkip ?? 3) + 1);
 }
 
 export default function RotoOutputsPanel() {
@@ -59,6 +64,8 @@ export default function RotoOutputsPanel() {
   // bumps it when a new rotoscope finishes, so we re-enumerate from disk.
   const outputsCount = useRotoStore((s) => s.outputs.length);
   const loadSequence = useRotoStore((s) => s.loadSequence);
+  const loadVideoForComparison = useRotoStore((s) => s.loadVideoForComparison);
+  const requestComparison = useRotoStore((s) => s.requestComparison);
 
   const [outputs, setOutputs] = useState<RotoOutput[]>([]);
   // Per-output-folder artifact presence (composed video / source clip / zip),
@@ -123,10 +130,35 @@ export default function RotoOutputsPanel() {
         name: output.name,
         dir: output.dir,
         urls: output.frames.map((p) => convertFileSrc(p)),
-        fps: effectiveFps(output.frameSkip),
+        fps: effectiveFps(output.frameSkip, output.sourceFps),
       });
     },
     [loadSequence],
+  );
+
+  // Compare this output against the exact clip that was processed: load the
+  // output sequence AND the archived source clip from the output folder, then
+  // ask the Video pane to enter comparison mode. The sequence + source-clip
+  // load is an atomic pair (see loadVideoForComparison's caller contract) -- it
+  // is the comparison source, NOT whatever the user currently has in the setup
+  // pane. Only callable when source_clip.mp4 exists (button gated on that).
+  const compareOutput = useCallback(
+    (output: RotoOutput) => {
+      const sourceClip = files[output.dir]?.sourceClip;
+      if (!sourceClip || output.frames.length === 0) return;
+      loadSequence({
+        name: output.name,
+        dir: output.dir,
+        urls: output.frames.map((p) => convertFileSrc(p)),
+        fps: effectiveFps(output.frameSkip, output.sourceFps),
+      });
+      loadVideoForComparison({
+        path: sourceClip,
+        ...(output.sourceFps != null ? { fps: output.sourceFps } : {}),
+      });
+      requestComparison();
+    },
+    [files, loadSequence, loadVideoForComparison, requestComparison],
   );
 
   // Open a file/folder with the OS default handler. stopPropagation in the
@@ -334,6 +366,19 @@ export default function RotoOutputsPanel() {
                 >
                   Open folder
                 </button>
+                {files[o.dir]?.sourceClip ? (
+                  <button
+                    type="button"
+                    className="roto-outputs__btn"
+                    title="Compare against the processed source clip"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      compareOutput(o);
+                    }}
+                  >
+                    Compare
+                  </button>
+                ) : null}
                 {files[o.dir]?.video ? (
                   <button
                     type="button"

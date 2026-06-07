@@ -38,6 +38,34 @@ const ASSUMED_FPS = 30;
 const COMPARE_LAYOUT_KEY = "claude-motion:rotoCompareLayout";
 
 /**
+ * Shared spacebar play/pause: a window-level `keydown` listener that fires
+ * `onToggle` on Space, but never while focus is in a text-entry surface (INPUT,
+ * TEXTAREA, or any contenteditable -- e.g. Monaco's accessibility layer), so
+ * typing a clip time or a filename never toggles playback. No-op while
+ * `enabled` is false, so a player that isn't on screen doesn't steal the key
+ * (the source scrubber and the SequencePlayer are mounted at different times).
+ * `onToggle` is read through a ref so the listener binds once per `enabled`
+ * flip rather than on every render.
+ */
+function useSpacebarToggle(enabled: boolean, onToggle: () => void) {
+  const cb = useRef(onToggle);
+  cb.current = onToggle;
+  useEffect(() => {
+    if (!enabled) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      const el = document.activeElement as HTMLElement | null;
+      const tag = el?.tagName ?? "";
+      if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+      e.preventDefault();
+      cb.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [enabled]);
+}
+
+/**
  * Looping stop-motion playback of a loaded output's PNG sequence. Advances a
  * frame index on a timer at the sequence's effective fps and loops. Renders the
  * current frame as an <img> over a checkerboard so the transparent rotoscope
@@ -52,20 +80,58 @@ function SequencePlayer({
   onClose: () => void;
 }) {
   const [frame, setFrame] = useState(0);
+  // S3: playback is user-controlled. Starts playing on load; the interval
+  // timer below is conditional on this flag.
+  const [playing, setPlaying] = useState(true);
+  const [scrubbing, setScrubbing] = useState(false);
+  const trackRef = useRef<HTMLDivElement | null>(null);
   const { urls, fps, name } = sequence;
   const count = urls.length;
 
+  // Reset to the first frame and resume playback whenever a new sequence loads.
   useEffect(() => {
     setFrame(0);
-    if (count <= 1) return;
+    setPlaying(true);
+  }, [count, fps]);
+
+  // Advance the loop only while playing (and not mid-scrub). Re-created when
+  // playing / count / fps change, mirroring the old unconditional timer.
+  useEffect(() => {
+    if (!playing || scrubbing || count <= 1) return;
     const periodMs = 1000 / Math.max(1, fps);
     const id = window.setInterval(() => {
       setFrame((f) => (f + 1) % count);
     }, periodMs);
     return () => window.clearInterval(id);
-  }, [count, fps]);
+  }, [playing, scrubbing, count, fps]);
+
+  // Spacebar toggles play/pause for the loaded output (same guard as the source
+  // scrubber). Only active while there is more than one frame to animate.
+  useSpacebarToggle(count > 1, () => setPlaying((p) => !p));
+
+  const frameFromPointer = (clientX: number): number => {
+    const track = trackRef.current;
+    if (!track || count <= 1) return 0;
+    const rect = track.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    return Math.min(count - 1, Math.max(0, Math.round(frac * (count - 1))));
+  };
+
+  // Dragging the handle sets the frame directly and pauses playback (same
+  // interaction model as ClipRangeControl's seek track).
+  const onTrackDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setPlaying(false);
+    setScrubbing(true);
+    setFrame(frameFromPointer(e.clientX));
+  };
+  const onTrackMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (scrubbing) setFrame(frameFromPointer(e.clientX));
+  };
+  const onTrackUp = () => setScrubbing(false);
 
   const current = urls[Math.min(frame, count - 1)];
+  const pct = count > 1 ? (frame / (count - 1)) * 100 : 0;
 
   return (
     <div className="roto-video__seq">
@@ -95,6 +161,34 @@ function SequencePlayer({
           ))}
         </div>
       </div>
+      {count > 1 ? (
+        <div className="roto-video__seq-controls">
+          <button
+            type="button"
+            className="roto-video__seq-play"
+            onClick={() => setPlaying((p) => !p)}
+            aria-label={playing ? "Pause" : "Play"}
+          >
+            {playing ? "Pause" : "Play"}
+          </button>
+          <div
+            ref={trackRef}
+            className="roto-video__seq-track"
+            onPointerDown={onTrackDown}
+            onPointerMove={onTrackMove}
+            onPointerUp={onTrackUp}
+            onPointerCancel={onTrackUp}
+            onLostPointerCapture={onTrackUp}
+            title="Drag to scrub"
+          >
+            <div className="roto-video__seq-fill" style={{ width: `${pct}%` }} />
+            <div className="roto-video__seq-handle" style={{ left: `${pct}%` }} />
+          </div>
+          <span className="roto-video__seq-readout">
+            frame {Math.min(frame + 1, count)} / {count} @ {fps.toFixed(1)} fps
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -165,9 +259,14 @@ function ClipRangeControl({
   const pct = (t: number) =>
     duration && duration > 0 ? Math.min(100, Math.max(0, (t / duration) * 100)) : 0;
 
+  // The selected span: [clipStart, clipEnd], defaulting an unset bound to the
+  // clip edge. With neither set this is the full width (whole clip selected).
   const regionLeft = clipStart != null ? pct(clipStart) : 0;
   const regionRight = clipEnd != null ? pct(clipEnd) : 100;
-  const hasRegion = clipStart != null && clipEnd != null && clipEnd > clipStart;
+  // Only draw the selected span for a non-inverted range. With clipStart >
+  // clipEnd the width clamps to 0 but both flank masks would still render, an odd
+  // visual -- suppress the region entirely until the bounds form a positive span.
+  const hasValidRegion = regionRight > regionLeft;
 
   const seekFromPointer = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!duration || duration <= 0) return;
@@ -198,11 +297,31 @@ function ClipRangeControl({
         onPointerDown={seekFromPointer}
         title={duration ? "Click to seek" : undefined}
       >
-        {hasRegion ? (
+        {/* Selected span at full brightness (full width until a bound is set).
+            Suppressed when the range is inverted (clipStart > clipEnd). */}
+        {hasValidRegion ? (
           <div
             className="roto-clip__region"
             style={{ left: `${regionLeft}%`, width: `${regionRight - regionLeft}%` }}
           />
+        ) : null}
+        {/* Darkened flanks: the part of the clip outside the selected span. The
+            left flank appears once a start is set, the right once an end is. */}
+        {hasValidRegion && clipStart != null && regionLeft > 0 ? (
+          <div className="roto-clip__mask" style={{ left: 0, width: `${regionLeft}%` }} />
+        ) : null}
+        {hasValidRegion && clipEnd != null && regionRight < 100 ? (
+          <div
+            className="roto-clip__mask"
+            style={{ left: `${regionRight}%`, width: `${100 - regionRight}%` }}
+          />
+        ) : null}
+        {/* Start / end markers. */}
+        {clipStart != null ? (
+          <div className="roto-clip__marker" style={{ left: `${regionLeft}%` }} />
+        ) : null}
+        {clipEnd != null ? (
+          <div className="roto-clip__marker" style={{ left: `${regionRight}%` }} />
         ) : null}
         <div className="roto-clip__playhead" style={{ left: `${pct(currentTime)}%` }} />
       </div>
@@ -253,6 +372,7 @@ function ClipRangeControl({
 export default function RotoVideoPanel() {
   const video = useRotoStore((s) => s.video);
   const loadedSequence = useRotoStore((s) => s.loadedSequence);
+  const comparisonNonce = useRotoStore((s) => s.comparisonNonce);
   const clearSequence = useRotoStore((s) => s.clearSequence);
   const startFrame = useRotoStore((s) => s.startFrame);
   const clipStart = useRotoStore((s) => s.clipStart);
@@ -308,6 +428,18 @@ export default function RotoVideoPanel() {
     if (!canCompare) setComparisonActive(false);
   }, [canCompare]);
 
+  // S5: the Outputs pane's "Compare" button loads a (sequence, source-clip) pair
+  // and bumps comparisonNonce to ask us to enter comparison mode automatically.
+  // Watch for the nonce changing (not its initial value, so a fresh mount with a
+  // stale nonce doesn't auto-open) and flip comparison on.
+  const lastComparisonNonce = useRef(comparisonNonce);
+  useEffect(() => {
+    if (comparisonNonce !== lastComparisonNonce.current) {
+      lastComparisonNonce.current = comparisonNonce;
+      setComparisonActive(true);
+    }
+  }, [comparisonNonce]);
+
   const toggleLayout = () => {
     setCompareLayout((prev) => {
       const next = prev === "side-by-side" ? "stacked" : "side-by-side";
@@ -323,6 +455,35 @@ export default function RotoVideoPanel() {
   const lockStartFrame = () => {
     const t = playerRef.current?.currentTime ?? currentTime;
     setStartFrame(Math.max(0, Math.round(t * fps)));
+  };
+
+  // S1: spacebar toggles the source scrubber's play/pause. Enabled only while
+  // the scrub <video> is actually the mounted player -- a source is loaded, no
+  // output sequence / comparison is showing, no job is running, and the
+  // reference frame is not yet locked (PointOverlay replaces the <video> once
+  // it is, so playerRef would be stale).
+  const scrubSpacebarEnabled =
+    videoUrl != null &&
+    loadedSequence == null &&
+    !comparisonActive &&
+    !isJobRunning &&
+    startFrame == null;
+  useSpacebarToggle(scrubSpacebarEnabled, () => {
+    const v = playerRef.current;
+    if (!v) return;
+    if (v.paused) void v.play();
+    else v.pause();
+  });
+
+  // S2: stamping a clip start nudges the playhead to it so locking the
+  // reference frame defaults to the clip's first frame. One-way and only before
+  // a frame is locked, so it never clobbers a frame the user picked first.
+  const handleSetClipStart = (s: number | null) => {
+    setClipStart(s);
+    if (s != null && startFrame == null && playerRef.current) {
+      playerRef.current.currentTime = s;
+      setCurrentTime(s);
+    }
   };
 
   // --- Job lifecycle ---------------------------------------------------------
@@ -490,7 +651,7 @@ export default function RotoVideoPanel() {
                 currentTime={currentTime}
                 clipStart={clipStart}
                 clipEnd={clipEnd}
-                onSetStart={setClipStart}
+                onSetStart={handleSetClipStart}
                 onSetEnd={setClipEnd}
                 onSeek={(t) => {
                   if (playerRef.current) {
@@ -687,7 +848,7 @@ const STYLES = `
 }
 .roto-clip__track {
   position: relative;
-  height: 10px;
+  height: 26px;
   border-radius: 5px;
   background: var(--surface);
   border: 1px solid var(--border-soft);
@@ -698,8 +859,26 @@ const STYLES = `
   position: absolute;
   top: 0;
   bottom: 0;
+  /* The selected span reads at full brightness in the accent color. */
   background: var(--accent, #6ea8fe);
-  opacity: 0.45;
+  opacity: 0.85;
+}
+.roto-clip__mask {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* Darken the clip outside the selected span (Resolve-style trim shading). */
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.roto-clip__marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent, #6ea8fe);
+  pointer-events: none;
 }
 .roto-clip__playhead {
   position: absolute;
@@ -708,6 +887,7 @@ const STYLES = `
   width: 2px;
   margin-left: -1px;
   background: #fff;
+  pointer-events: none;
 }
 .roto-clip__inputs {
   display: flex;
@@ -825,6 +1005,64 @@ const STYLES = `
   overflow: hidden;
   opacity: 0;
   pointer-events: none;
+}
+.roto-video__seq-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 12px;
+  flex: none;
+}
+.roto-video__seq-play {
+  flex: none;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  cursor: pointer;
+  min-width: 44px;
+}
+.roto-video__seq-track {
+  position: relative;
+  flex: 1 1 auto;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  cursor: pointer;
+  overflow: visible;
+  touch-action: none;
+  user-select: none;
+}
+.roto-video__seq-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  border-radius: 5px 0 0 5px;
+  background: var(--accent, #6ea8fe);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.roto-video__seq-handle {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 3px;
+  margin-left: -1px;
+  border-radius: 2px;
+  background: #fff;
+  pointer-events: none;
+}
+.roto-video__seq-readout {
+  flex: none;
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-faint);
+  white-space: nowrap;
 }
 .roto-video__compare-toolbar {
   display: flex;

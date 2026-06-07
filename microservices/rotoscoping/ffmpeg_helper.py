@@ -17,6 +17,7 @@ import platform
 import shutil
 import subprocess
 import zipfile
+from fractions import Fraction
 from functools import lru_cache
 from pathlib import Path
 from urllib.request import urlopen
@@ -130,7 +131,7 @@ def probe_video(video_path: Path) -> tuple[float, float]:
     stream = (data.get("streams") or [{}])[0]
     fmt = data.get("format") or {}
 
-    fps = _parse_frame_rate(stream.get("r_frame_rate"))
+    fps = _parse_fps(stream.get("r_frame_rate"))
 
     duration_raw = fmt.get("duration") or stream.get("duration")
     if duration_raw is None:
@@ -140,17 +141,22 @@ def probe_video(video_path: Path) -> tuple[float, float]:
     return duration, fps
 
 
-def _parse_frame_rate(rate: str | None) -> float:
-    """Parse an ffprobe r_frame_rate like '30000/1001' into a float fps."""
-    if not rate or rate == "0/0":
-        raise FfmpegError("ffprobe returned no frame rate for the video")
-    if "/" in rate:
-        num, den = rate.split("/", 1)
-        den_f = float(den)
-        if den_f == 0:
-            raise FfmpegError(f"invalid frame rate from ffprobe: {rate}")
-        return float(num) / den_f
-    return float(rate)
+def _parse_fps(fps_str: str | None) -> float:
+    """Parse an ffmpeg AVRational fps string to a float fps.
+
+    ffprobe reports the frame rate as a rational fraction (e.g. '30000/1001'
+    for NTSC 29.97, '24000/1001' for film 23.976). `float()` cannot parse those
+    and `eval` is unsafe, so we use the stdlib `fractions.Fraction`. Empty,
+    zero, or otherwise unparseable input falls back to 30.0 rather than raising:
+    a slightly-wrong-but-sane fps only skews playback speed, whereas a raise
+    would fail the whole probe over a missing metadata field.
+    """
+    if not fps_str or fps_str == "0/0":
+        return 30.0
+    try:
+        return float(Fraction(fps_str))
+    except (ValueError, ZeroDivisionError, TypeError):
+        return 30.0
 
 
 def extract_frames(
