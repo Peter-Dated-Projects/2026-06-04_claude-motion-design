@@ -7,6 +7,28 @@ import { useRotoStore } from "../store/rotoStore";
 import type { RotoscopingStatus } from "../types/roto";
 import { SunIcon, MoonIcon, CloseIcon } from "./icons";
 
+// "Follow OS" monitor glyph for the Auto theme segment. Defined locally (not in
+// icons.tsx) to keep this integration UI self-contained; sized to match
+// SunIcon/MoonIcon.
+function AutoIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="2" y="3" width="20" height="14" rx="2" />
+      <path d="M8 21h8M12 17v4" />
+    </svg>
+  );
+}
+
 // Settings panel (gear icon). Read-only diagnostics about the local Claude setup:
 // CLI availability, the Remotion docs MCP, the bundled skills prompt path, and the
 // app version. Everything here is derived from real backend state -- no fabricated
@@ -164,7 +186,9 @@ function segBtn(active: boolean): React.CSSProperties {
 const ROTO_HOST_KEY = "claude-motion:rotoHost";
 
 function Settings({ open, onClose }: SettingsProps) {
-  const theme = useThemeStore((s) => s.theme);
+  // Read `preference` (incl. "auto"), not the resolved `theme`, so exactly one
+  // segment highlights -- otherwise Auto + the OS-resolved button both light up.
+  const preference = useThemeStore((s) => s.preference);
   const setTheme = useThemeStore((s) => s.setTheme);
   const [cli, setCli] = useState<ClaudeCliInfo | null>(null);
   const [overrideInput, setOverrideInput] = useState("");
@@ -300,17 +324,17 @@ function Settings({ open, onClose }: SettingsProps) {
         <div style={{ ...ROW, borderTop: "none", paddingTop: 0 }}>
           <span style={LABEL}>Appearance</span>
           <div style={SEG_WRAP} role="radiogroup" aria-label="Theme">
-            {(["light", "dark"] as Theme[]).map((t) => (
+            {(["light", "dark", "auto"] as Theme[]).map((t) => (
               <button
                 key={t}
                 type="button"
                 role="radio"
-                aria-checked={theme === t}
-                style={segBtn(theme === t)}
+                aria-checked={preference === t}
+                style={segBtn(preference === t)}
                 onClick={() => setTheme(t)}
               >
-                {t === "light" ? <SunIcon /> : <MoonIcon />}
-                {t === "light" ? "Light" : "Dark"}
+                {t === "auto" ? <AutoIcon /> : t === "light" ? <SunIcon /> : <MoonIcon />}
+                {t === "auto" ? "Auto" : t === "light" ? "Light" : "Dark"}
               </button>
             ))}
           </div>

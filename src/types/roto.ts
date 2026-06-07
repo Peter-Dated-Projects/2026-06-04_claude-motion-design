@@ -48,6 +48,26 @@ export interface RotoscopingStatus {
   model?: string;
   vramUsedGb?: number;
   vramTotalGb?: number;
+  /** GPU probe from /health (name, generation, dtype, etc.), when reported. */
+  gpuProfile?: GpuProfile;
+}
+
+/**
+ * The service's startup GPU probe, surfaced through /health. All fields are
+ * informational diagnostics. Mirrors `GpuProfile` in rotoscoping.rs (which maps
+ * the service's snake_case `gpu_profile` body into this camelCase payload).
+ */
+export interface GpuProfile {
+  /** Device name, e.g. "NVIDIA GeForce RTX 4090". */
+  name: string;
+  /** Detected generation: blackwell | hopper | ada | ampere | turing | legacy. */
+  generation: string;
+  /** Compute capability as [major, minor], e.g. [8, 9] for Ada. */
+  computeCapability: number[];
+  /** Total VRAM in GB. */
+  vramGb: number;
+  /** Autocast dtype label, e.g. "bfloat16". */
+  dtypeStr: string;
 }
 
 /**

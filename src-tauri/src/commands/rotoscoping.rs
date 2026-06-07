@@ -90,6 +90,22 @@ pub struct RotoscopingStatus {
     pub vram_used_gb: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vram_total_gb: Option<f64>,
+    #[serde(rename = "gpuProfile", skip_serializing_if = "Option::is_none")]
+    pub gpu_profile: Option<GpuProfile>,
+}
+
+/// The service's startup GPU probe, surfaced through /health and forwarded to the
+/// frontend. Serialized camelCase (frontend contract); the service's own JSON is
+/// snake_case, so the deserialize side is `GpuProfileBody` and we map between them
+/// in `check_blocking` (same split as `HealthBody` -> `RotoscopingStatus`).
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GpuProfile {
+    pub name: String,
+    pub generation: String,
+    pub compute_capability: Vec<i64>,
+    pub vram_gb: f64,
+    pub dtype_str: String,
 }
 
 /// A progress tick emitted on `roto://progress`. Mirrors the microservice's SSE
@@ -125,6 +141,32 @@ struct HealthBody {
     model: Option<String>,
     vram_used_gb: Option<f64>,
     vram_total_gb: Option<f64>,
+    gpu_profile: Option<GpuProfileBody>,
+}
+
+/// Deserialize side of the GPU profile -- matches the service's snake_case
+/// `gpu_profile` object. Mapped into the camelCase `GpuProfile` for the frontend.
+/// All fields optional so a partial/older body still parses.
+#[derive(Deserialize)]
+struct GpuProfileBody {
+    name: Option<String>,
+    generation: Option<String>,
+    compute_capability: Option<Vec<i64>>,
+    vram_gb: Option<f64>,
+    dtype_str: Option<String>,
+}
+
+/// Map the service's snake_case profile body into the camelCase frontend payload.
+/// Returns None if the essential labels (name + generation) are absent, so a
+/// stub/partial object doesn't surface as a half-empty profile.
+fn map_gpu_profile(b: GpuProfileBody) -> Option<GpuProfile> {
+    Some(GpuProfile {
+        name: b.name?,
+        generation: b.generation?,
+        compute_capability: b.compute_capability.unwrap_or_default(),
+        vram_gb: b.vram_gb.unwrap_or(0.0),
+        dtype_str: b.dtype_str.unwrap_or_default(),
+    })
 }
 
 /// One SSE `data:` JSON object from /rotoscope/{job_id}/progress.
@@ -255,6 +297,7 @@ fn check_blocking(host: &str) -> RotoscopingStatus {
         model: None,
         vram_used_gb: None,
         vram_total_gb: None,
+        gpu_profile: None,
     };
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(2))
@@ -280,12 +323,14 @@ fn check_blocking(host: &str) -> RotoscopingStatus {
             model: body.model,
             vram_used_gb: body.vram_used_gb,
             vram_total_gb: body.vram_total_gb,
+            gpu_profile: body.gpu_profile.and_then(map_gpu_profile),
         },
         None => RotoscopingStatus {
             available: true,
             model: None,
             vram_used_gb: None,
             vram_total_gb: None,
+            gpu_profile: None,
         },
     }
 }
@@ -301,6 +346,7 @@ pub async fn check_rotoscoping_service(host: String) -> RotoscopingStatus {
             model: None,
             vram_used_gb: None,
             vram_total_gb: None,
+            gpu_profile: None,
         })
 }
 
