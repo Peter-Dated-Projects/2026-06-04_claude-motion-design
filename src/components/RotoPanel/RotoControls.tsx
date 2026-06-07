@@ -68,6 +68,10 @@ export default function RotoControls({ canGenerate, onGenerate }: RotoControlsPr
   // transient empty / invalid string) without us clobbering it each keystroke.
   const [fpsText, setFpsText] = useState("");
   const [fpsError, setFpsError] = useState(false);
+  // Ceiling warning shown when the typed fps exceeds the source rate. Held in its
+  // own state so the targetFps sync effect (which fires as we clamp to the source
+  // rate) does NOT wipe it -- it persists until the next valid in-range edit.
+  const [fpsWarning, setFpsWarning] = useState<string | null>(null);
 
   // Sync the field from the derived target fps whenever it (or probe state)
   // changes from outside this input -- e.g. a new video, or skip set elsewhere.
@@ -75,6 +79,13 @@ export default function RotoControls({ canGenerate, onGenerate }: RotoControlsPr
     setFpsText(targetFps != null ? trimFps(targetFps) : "");
     setFpsError(false);
   }, [targetFps]);
+
+  // Clear a stale ceiling warning when the source video changes (new source fps).
+  // Keyed on `video` (not targetFps) so the in-place clamp -- which moves targetFps
+  // -- does not wipe the warning it just set.
+  useEffect(() => {
+    setFpsWarning(null);
+  }, [video]);
 
   const onFpsChange = (raw: string) => {
     setFpsText(raw);
@@ -86,6 +97,15 @@ export default function RotoControls({ canGenerate, onGenerate }: RotoControlsPr
     }
     setFpsError(false);
     if (sourceFps != null) {
+      if (parsed > sourceFps) {
+        // Can't output more frames than the source has: clamp to every frame
+        // (skip 0) and warn. The field snaps back to the source rate via the
+        // sync effect once frameSkip lands at 0.
+        setFpsWarning(`Max source fps is ${trimFps(sourceFps)}fps`);
+        setFrameSkip(0);
+        return;
+      }
+      setFpsWarning(null);
       setFrameSkip(Math.max(0, Math.round(sourceFps / parsed) - 1));
     }
   };
@@ -154,6 +174,9 @@ export default function RotoControls({ canGenerate, onGenerate }: RotoControlsPr
             </span>
           ) : null}
         </div>
+        {probed && fpsWarning ? (
+          <div className="roto-controls__fps-warning">{fpsWarning}</div>
+        ) : null}
       </div>
 
       <div className="roto-controls__estimate">
@@ -185,44 +208,52 @@ export default function RotoControls({ canGenerate, onGenerate }: RotoControlsPr
               {opt.label}
             </button>
           ))}
+          {/* Custom dims live INLINE on the same row as the segments so toggling
+              Custom doesn't add a row below (keeps the section height stable). */}
+          {resolution.preset === "custom" ? (
+            <div className="roto-controls__custom-inline">
+              <label className="roto-controls__dim">
+                <span>W</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={resolution.width || ""}
+                  onChange={(e) => setCustomDimension("width", e.target.value)}
+                />
+              </label>
+              <span className="roto-controls__dim-x">x</span>
+              <label className="roto-controls__dim">
+                <span>H</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={resolution.height || ""}
+                  onChange={(e) => setCustomDimension("height", e.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                title="Maintain aspect ratio"
+                aria-pressed={resolution.maintainAspect}
+                className={
+                  "roto-controls__aspect-toggle" +
+                  (resolution.maintainAspect
+                    ? " roto-controls__aspect-toggle--active"
+                    : "")
+                }
+                onClick={() =>
+                  setResolution({
+                    ...resolution,
+                    maintainAspect: !resolution.maintainAspect,
+                  })
+                }
+              >
+                Aspect
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
-
-      {resolution.preset === "custom" ? (
-        <div className="roto-controls__custom">
-          <div className="roto-controls__dims">
-            <label className="roto-controls__dim">
-              <span>W</span>
-              <input
-                type="number"
-                min={1}
-                value={resolution.width || ""}
-                onChange={(e) => setCustomDimension("width", e.target.value)}
-              />
-            </label>
-            <span className="roto-controls__dim-x">x</span>
-            <label className="roto-controls__dim">
-              <span>H</span>
-              <input
-                type="number"
-                min={1}
-                value={resolution.height || ""}
-                onChange={(e) => setCustomDimension("height", e.target.value)}
-              />
-            </label>
-          </div>
-          <label className="roto-controls__aspect">
-            <input
-              type="checkbox"
-              checked={resolution.maintainAspect}
-              onChange={(e) =>
-                setResolution({ ...resolution, maintainAspect: e.target.checked })
-              }
-            />
-            <span>Maintain aspect ratio</span>
-          </label>
-        </div>
-      ) : null}
 
       {/* --- Quality ------------------------------------------------------ */}
       <div className="roto-controls__field">
@@ -232,14 +263,17 @@ export default function RotoControls({ canGenerate, onGenerate }: RotoControlsPr
             <button
               key={opt.value}
               type="button"
-              title={opt.hint}
               className={
-                "roto-controls__segment" +
+                "roto-controls__segment roto-controls__segment--tip" +
                 (quality === opt.value ? " roto-controls__segment--active" : "")
               }
               onClick={() => setQuality(opt.value)}
             >
               {opt.label}
+              {/* Immediate custom tooltip, replacing the delayed native title. */}
+              <span className="roto-controls__tip" role="tooltip">
+                {opt.hint}
+              </span>
             </button>
           ))}
         </div>
@@ -334,6 +368,10 @@ const STYLES = `
   font-size: 11px;
   color: var(--text-faint);
 }
+.roto-controls__fps-warning {
+  font-size: 11px;
+  color: #d08a3e;
+}
 .roto-controls__estimate {
   font-size: 11px;
   color: var(--text-faint);
@@ -347,6 +385,7 @@ const STYLES = `
   flex-wrap: wrap;
 }
 .roto-controls__segment {
+  position: relative;
   min-width: 48px;
   padding: 4px 10px;
   font-size: 12px;
@@ -365,30 +404,22 @@ const STYLES = `
   background: var(--accent, #6ea8fe);
   border-color: var(--accent, #6ea8fe);
 }
-.roto-controls__custom {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 8px 10px;
-  background: var(--surface);
-  border: 1px solid var(--border-soft);
-  border-radius: 5px;
-}
-.roto-controls__dims {
+/* Custom-resolution inputs, inline on the resolution segment row. */
+.roto-controls__custom-inline {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 .roto-controls__dim {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   font-size: 11px;
   color: var(--text-muted);
 }
 .roto-controls__dim input {
-  width: 72px;
-  padding: 4px 8px;
+  width: 56px;
+  padding: 4px 6px;
   font-size: 13px;
   font-family: inherit;
   color: var(--text);
@@ -400,13 +431,52 @@ const STYLES = `
   color: var(--text-faint);
   font-size: 12px;
 }
-.roto-controls__aspect {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
+.roto-controls__aspect-toggle {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: inherit;
   color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
   cursor: pointer;
+}
+.roto-controls__aspect-toggle:hover {
+  border-color: var(--accent, #6ea8fe);
+}
+.roto-controls__aspect-toggle--active {
+  color: #fff;
+  background: var(--accent, #6ea8fe);
+  border-color: var(--accent, #6ea8fe);
+}
+/* Custom quality tooltip: immediate (no native title delay), positioned above
+   the button, raised above siblings so the controls row doesn't clip it. */
+.roto-controls__tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  width: max-content;
+  max-width: 200px;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.3;
+  text-align: center;
+  white-space: normal;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.roto-controls__segment--tip:hover .roto-controls__tip {
+  opacity: 1;
+  visibility: visible;
 }
 .roto-controls__generate {
   align-self: flex-start;
