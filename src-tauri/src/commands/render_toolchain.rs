@@ -41,19 +41,18 @@ pub struct ToolchainManifest {
 // install that predates the bundled IG CLIs. Keep it in lockstep with the build
 // script's printed `version`.
 //
-// SHA256 NOTE: this archive now bundles bun + yt-dlp + ffmpeg + ffprobe in
-// addition to node + the Remotion render closure, so the contents (and sha256)
-// changed and the archive must be rebuilt + re-uploaded. Until that out-of-band
-// step is done, `sha256` is the REPLACE_ME placeholder, which `install_render_*`
-// treats as "not configured yet" and reports with an actionable rebuild message
-// -- preferable to a silent checksum mismatch, or to installing a stale MP4-only
-// archive that the IG checks would then (correctly) flag as missing its CLIs
-// while `is_installed` reports the toolchain present so it never re-fetches.
+// CONTENTS: node + the Remotion render closure, plus the four CLIs the IG
+// pipeline spawns (bun, yt-dlp, ffmpeg, ffprobe). Built by
+// scripts/build-render-toolchain.mjs (macOS arm64) and published as the release
+// asset below. ffmpeg/ffprobe are osxexperts.net darwin-arm64 8.1 static builds
+// (evermeet.cx is x86_64-only). When rebuilding, paste the script's printed
+// sha256 + sizeMb here; a mismatched/REPLACE_ME sha makes `install_render_*`
+// report "not configured" rather than silently failing the checksum.
 pub const TOOLCHAIN: ToolchainManifest = ToolchainManifest {
     version: "4.0.473-r2",
     url: "https://github.com/Peter-Dated-Projects/2026-06-04_claude-motion-design/releases/download/render-toolchain-v4.0.473-r2/render-toolchain-4.0.473-r2-darwin-arm64.tar.gz",
-    sha256: "REPLACE_ME",
-    size_mb: 230,
+    sha256: "7cad9c4e9dfd8be63bf05173c2ec7dc8db680f7529d01f694334bb581b728df1",
+    size_mb: 174,
 };
 
 /// Sentinel returned by `export_mp4` when no render toolchain is available (and

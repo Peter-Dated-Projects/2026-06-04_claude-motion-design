@@ -90,18 +90,20 @@ const TOOLS = [
   },
   {
     name: "ffmpeg",
-    // Static darwin-arm64 build. evermeet.cx serves per-binary zips; confirm the
-    // served arch is arm64 (the build self-checks). Pin the exact release.
-    version: "7.1",
-    url: "https://evermeet.cx/ffmpeg/ffmpeg-7.1.zip",
+    // Static darwin-arm64 build from osxexperts.net. evermeet.cx is x86_64-only,
+    // so its builds fail the arm64 self-check below. The zip holds a bare
+    // `ffmpeg` mach-o at root; the build self-verifies arch + runs --version.
+    version: "8.1",
+    url: "https://www.osxexperts.net/ffmpeg81arm.zip",
     archive: "zip",
     member: "ffmpeg",
     versionArgs: ["-version"],
   },
   {
     name: "ffprobe",
-    version: "7.1",
-    url: "https://evermeet.cx/ffmpeg/ffprobe-7.1.zip",
+    // darwin-arm64 from osxexperts.net (same reason as ffmpeg above).
+    version: "8.1",
+    url: "https://www.osxexperts.net/ffprobe81arm.zip",
     archive: "zip",
     member: "ffprobe",
     versionArgs: ["-version"],
