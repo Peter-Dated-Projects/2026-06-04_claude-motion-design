@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   useRotoStore,
   RESOLUTION_PRESETS,
+  type ModelSize,
   type QualityPreset,
   type ResolutionPreset,
   type RotoResolution,
@@ -47,6 +48,23 @@ const RESOLUTION_OPTIONS: { value: ResolutionPreset; label: string }[] = [
   { value: "custom", label: "Custom" },
 ];
 
+const MODEL_OPTIONS: { value: ModelSize; label: string; hint: string }[] = [
+  { value: "tiny", label: "Tiny", hint: "Fastest, lowest quality masks" },
+  { value: "small", label: "Small", hint: "Faster, slightly lower quality" },
+  { value: "base_plus", label: "Base+", hint: "Balanced default" },
+  { value: "large", label: "Large", hint: "Best masks, slowest + most VRAM" },
+];
+
+/**
+ * Swap-stage labels the SAM2 service (T-006) emits on `roto://progress` AHEAD of
+ * the frame stages when a job's requested model differs from the resident one.
+ * Pinned verbatim by T-006: `downloading_model` carries a 0..1 download fraction,
+ * then `loading_model`, and `queued` for a job waiting behind a swap/in-flight run.
+ * RotoControls reflects these so the control reads "loading model..." instead of
+ * looking idle while a multi-GB checkpoint downloads or the predictor rebuilds.
+ */
+const MODEL_SWAP_STAGES = new Set(["downloading_model", "loading_model", "queued"]);
+
 export default function RotoControls({ canGenerate, onGenerate }: RotoControlsProps) {
   const video = useRotoStore((s) => s.video);
   const frameSkip = useRotoStore((s) => s.frameSkip);
@@ -55,6 +73,26 @@ export default function RotoControls({ canGenerate, onGenerate }: RotoControlsPr
   const setResolution = useRotoStore((s) => s.setResolution);
   const quality = useRotoStore((s) => s.quality);
   const setQuality = useRotoStore((s) => s.setQuality);
+  const modelSize = useRotoStore((s) => s.modelSize);
+  const setModelSize = useRotoStore((s) => s.setModelSize);
+  // Live progress tick (fed at the app boundary via applyProgress). Used only to
+  // show the model-swap state on the Model control -- never to drive a job.
+  const progress = useRotoStore((s) => s.progress);
+
+  // While the service is swapping models, surface it on the control instead of
+  // leaving it looking idle. `downloading_model` carries a fraction; the others
+  // are indeterminate. Stages pinned by T-006 (see MODEL_SWAP_STAGES).
+  const swapStage = progress && MODEL_SWAP_STAGES.has(progress.stage)
+    ? progress.stage
+    : null;
+  const modelLoadingLabel =
+    swapStage === "downloading_model"
+      ? `Downloading model... ${Math.round((progress?.progress ?? 0) * 100)}%`
+      : swapStage === "queued"
+        ? "Queued (model swap)..."
+        : swapStage === "loading_model"
+          ? "Loading model..."
+          : null;
 
   const duration = video?.durationSeconds ?? null;
   // Source fps is required to map between fps and frame-skip; null until probed.
@@ -279,6 +317,34 @@ export default function RotoControls({ canGenerate, onGenerate }: RotoControlsPr
         </div>
       </div>
 
+      {/* --- Model size --------------------------------------------------- */}
+      <div className="roto-controls__field">
+        <div className="roto-controls__label">Model</div>
+        <div className="roto-controls__segments">
+          {MODEL_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              className={
+                "roto-controls__segment roto-controls__segment--tip" +
+                (modelSize === opt.value ? " roto-controls__segment--active" : "")
+              }
+              onClick={() => setModelSize(opt.value)}
+            >
+              {opt.label}
+              <span className="roto-controls__tip" role="tooltip">
+                {opt.hint}
+              </span>
+            </button>
+          ))}
+        </div>
+        {/* Never lie about the model: while the service downloads/loads/queues a
+            swap, say so rather than leaving the control looking settled. */}
+        {modelLoadingLabel ? (
+          <div className="roto-controls__model-loading">{modelLoadingLabel}</div>
+        ) : null}
+      </div>
+
       <button
         type="button"
         className="roto-controls__generate"
@@ -383,6 +449,10 @@ const STYLES = `
   display: flex;
   gap: 4px;
   flex-wrap: wrap;
+}
+.roto-controls__model-loading {
+  font-size: 11px;
+  color: var(--accent, #6ea8fe);
 }
 .roto-controls__segment {
   position: relative;

@@ -188,6 +188,11 @@ function useRotoJobQueue(): RotoJobQueueApi {
           frameSkip: params.frameSkip,
           compress: params.compress,
           quality: params.quality,
+          // Per-job SAM2 model size (T-008 optional arg). Read from the store at
+          // run time rather than captured in RotoscopeParams at enqueue -- it is a
+          // setup-wide preference, not part of the per-job snapshot, and threading
+          // it through RotoscopeParams/RotoVideoPanel is out of this ticket's scope.
+          modelSize: useRotoStore.getState().modelSize,
         });
 
         // A cancel that raced a backend completion can leave this job's id in

@@ -56,6 +56,13 @@ export const MAX_FRAME_SKIP = 10;
 /** Named quality preset for the pre-upload re-encode (bug-bash proposal section 6b). */
 export type QualityPreset = "original" | "high" | "fast" | "low";
 
+/**
+ * Per-job SAM2 model size. The service (T-006) swaps the resident predictor to
+ * match this; absent/default reuses the launched model. The long names match the
+ * service's checkpoint labels (`base_plus`, not the Hydra short code `b+`).
+ */
+export type ModelSize = "tiny" | "small" | "base_plus" | "large";
+
 /** Output-resolution preset; `custom` unlocks the explicit width/height inputs. */
 export type ResolutionPreset = "360p" | "720p" | "1080p" | "custom";
 
@@ -93,6 +100,9 @@ export const DEFAULT_RESOLUTION: RotoResolution = {
 
 /** Proposal default: "fast" (~CRF 23) re-encode. */
 export const DEFAULT_QUALITY: QualityPreset = "fast";
+
+/** Default SAM2 model size (matches the service's launched default). */
+export const DEFAULT_MODEL_SIZE: ModelSize = "base_plus";
 
 /**
  * Hard cap (seconds) the rotoscoping microservice enforces on an uploaded clip
@@ -146,6 +156,8 @@ export interface RotoState {
   resolution: RotoResolution;
   /** Chosen re-encode quality preset; "original" skips the pre-upload re-encode. */
   quality: QualityPreset;
+  /** Chosen SAM2 model size; the service swaps to it per job (T-006). */
+  modelSize: ModelSize;
 
   // --- Job lifecycle ---------------------------------------------------------
   /** Job state machine. Mutated only through the actions below. */
@@ -218,6 +230,8 @@ export interface RotoState {
   setResolution: (resolution: RotoResolution) => void;
   /** Set the re-encode quality preset. */
   setQuality: (quality: QualityPreset) => void;
+  /** Set the SAM2 model size for the next job. */
+  setModelSize: (modelSize: ModelSize) => void;
 
   // --- Job actions -----------------------------------------------------------
   /** Begin a job: enter `uploading` with a fresh progress/error slate. */
@@ -261,6 +275,7 @@ const FRESH_SETUP = {
   frameSkip: DEFAULT_FRAME_SKIP,
   resolution: DEFAULT_RESOLUTION,
   quality: DEFAULT_QUALITY,
+  modelSize: DEFAULT_MODEL_SIZE,
   phase: "idle" as RotoPhase,
   progress: null,
   jobId: null,
@@ -287,6 +302,7 @@ export const useRotoStore = create<RotoState>((set) => ({
       points: [],
       resolution: DEFAULT_RESOLUTION,
       quality: DEFAULT_QUALITY,
+      modelSize: DEFAULT_MODEL_SIZE,
       progress: null,
       phase: "idle",
       error: null,
@@ -328,6 +344,8 @@ export const useRotoStore = create<RotoState>((set) => ({
   setResolution: (resolution) => set({ resolution }),
 
   setQuality: (quality) => set({ quality }),
+
+  setModelSize: (modelSize) => set({ modelSize }),
 
   startJob: (jobId) =>
     set({ jobId, phase: "uploading", progress: null, error: null }),
