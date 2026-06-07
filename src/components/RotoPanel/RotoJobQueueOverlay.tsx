@@ -61,6 +61,11 @@ function JobCard({
       statusText = "Cancelled";
       fillPct = pct;
       break;
+    default:
+      // Defensive fallback for an unexpected status (e.g. a future enum value).
+      statusText = String(job.status);
+      fillPct = pct;
+      break;
   }
 
   const showCancel = job.status === "queued" || job.status === "running";

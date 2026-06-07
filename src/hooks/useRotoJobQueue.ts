@@ -70,8 +70,14 @@ export interface RotoJobQueueApi {
   jobs: QueuedJob[];
   /** Append a job (and start it if nothing is running). Returns its id. */
   enqueue: (params: RotoscopeParams, label: string) => string;
-  /** Cancel a queued job (drops it) or a running job (cancels the backend run). */
-  cancel: (id: string) => void;
+  /**
+   * Cancel a queued job (drops it) or a running job (cancels the backend run).
+   * Returns true if cancelling promoted a queued job to running (the queue is
+   * still busy), false if the queue is now idle. Callers that mirror the
+   * running job into other state (e.g. rotoStore) use this to avoid clobbering
+   * the freshly-promoted job's state when they reset on cancel.
+   */
+  cancel: (id: string) => boolean;
   /** Remove a finished ("done"/"failed") card from the visible stack. */
   dismiss: (id: string) => void;
 }
@@ -115,6 +121,11 @@ function useRotoJobQueue(): RotoJobQueueApi {
 
   const scheduleRemove = useCallback(
     (id: string, delay: number) => {
+      // Clear any timer already pending for this id so a cancel/re-complete race
+      // can't leave two timers racing to remove the same card (double-remove) or
+      // an older timer firing against what is now a different job state.
+      const existing = autoRemoveTimers.current[id];
+      if (existing) clearTimeout(existing);
       autoRemoveTimers.current[id] = setTimeout(() => {
         delete autoRemoveTimers.current[id];
         commit((prev) => prev.filter((j) => j.id !== id));
@@ -165,6 +176,11 @@ function useRotoJobQueue(): RotoJobQueueApi {
           quality: params.quality,
         });
 
+        // A cancel that raced a backend completion can leave this job's id in
+        // `cancelledIds` even though the run resolved successfully (it never hit
+        // the trim-cancel or catch paths that clear it). Drop it here so the set
+        // doesn't grow unbounded across the app's lifetime.
+        cancelledIds.current.delete(job.id);
         commit((prev) =>
           prev.map((j) =>
             j.id === job.id ? { ...j, status: "done", progress: 1 } : j,
@@ -232,12 +248,12 @@ function useRotoJobQueue(): RotoJobQueueApi {
   );
 
   const cancel = useCallback(
-    (id: string) => {
+    (id: string): boolean => {
       const job = jobsRef.current.find((j) => j.id === id);
-      if (!job) return;
+      if (!job) return false;
       if (job.status === "queued") {
         commit((prev) => prev.filter((j) => j.id !== id));
-        return;
+        return false;
       }
       if (job.status === "running") {
         // Flag it so the in-flight run (mid-trim or mid-rotoscope) bails instead
@@ -253,8 +269,13 @@ function useRotoJobQueue(): RotoJobQueueApi {
         scheduleRemove(id, CANCEL_FADE_MS);
         // Free the queue for the next job; the cancelled run's promise will
         // reject into runJob's catch, which sees `cancelledIds` and no-ops.
+        // `processNext` promotes the next queued job synchronously (incl. its
+        // rotoStore.startJob), so a busy queue afterwards means the caller must
+        // NOT reset shared single-job state -- report that back.
         processNext();
+        return jobsRef.current.some((j) => j.status === "running");
       }
+      return false;
     },
     [commit, processNext, scheduleRemove],
   );

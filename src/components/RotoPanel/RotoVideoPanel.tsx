@@ -506,13 +506,19 @@ export default function RotoVideoPanel() {
     // store exposes no cancel reducer (its `reset` wipes the whole setup), so
     // flip just the job fields back to idle directly.
     const jobId = useRotoStore.getState().jobId;
-    if (jobId) queue.cancel(jobId);
-    useRotoStore.setState({
-      phase: "idle",
-      jobId: null,
-      progress: null,
-      error: null,
-    });
+    // queue.cancel may promote the next queued job to running (and call
+    // startJob() for it) before returning. Only reset the store back to idle
+    // when the queue is now idle -- otherwise we'd clobber the just-promoted
+    // job's freshly-written store state.
+    const promotedNext = jobId ? queue.cancel(jobId) : false;
+    if (!promotedNext) {
+      useRotoStore.setState({
+        phase: "idle",
+        jobId: null,
+        progress: null,
+        error: null,
+      });
+    }
   };
 
   // --- Render ----------------------------------------------------------------
