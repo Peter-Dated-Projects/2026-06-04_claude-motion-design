@@ -135,6 +135,10 @@ struct SseTick {
     progress: f64,
     frames_done: Option<u32>,
     frames_total: Option<u32>,
+    /// Probed source-video fps; the service sets it on the job at POST time, so
+    /// it rides every snapshot. Carried into meta.json so playback uses the real
+    /// rate. Optional: an older service body omits it.
+    source_fps: Option<f64>,
 }
 
 /// meta.json written alongside the extracted PNG sequence. Exactly the shape the
@@ -148,6 +152,11 @@ struct RotoMeta<'a> {
     model: String,
     generated_at: String,
     frame_count: u32,
+    /// Probed source-video fps, captured from the progress stream. Omitted when
+    /// the service didn't report one; the read-side (roto_media.rs) then falls
+    /// back to the 30fps playback estimate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_fps: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -305,27 +314,44 @@ fn fetch_model(host: &str) -> String {
 // SSE progress stream
 // ---------------------------------------------------------------------------
 
+/// Terminal outcome of the progress stream: the final stage plus the probed
+/// source fps observed along the way (the service stamps it on the job at POST
+/// time, so it appears in the very first snapshot). `source_fps` is `None` only
+/// if the service never reported one.
+struct StreamOutcome {
+    stage: String,
+    source_fps: Option<f64>,
+}
+
 /// Open the SSE progress stream, forward each tick as `roto://progress`, and
 /// block until a terminal stage arrives -- returning that stage (`"done"`,
-/// `"error"`, or `"cancelled"`) so the caller can branch. The job may not be
-/// registered server-side the instant we connect (the POST that creates it can
-/// race this), so a dropped/failed connection is retried with a short backoff
-/// rather than treated as the end. The POST has already succeeded by the time we
-/// get here, so the service was up a moment ago; we still cap consecutive connect
-/// failures so a service that dies mid-job can't hang the job forever -- exceeding
-/// the cap surfaces as `"error"`.
-fn run_progress_stream(app: &AppHandle, host: &str, job_id: &str) -> String {
+/// `"error"`, or `"cancelled"`) plus the last-seen source fps so the caller can
+/// branch and record it in meta.json. The job may not be registered server-side
+/// the instant we connect (the POST that creates it can race this), so a
+/// dropped/failed connection is retried with a short backoff rather than treated
+/// as the end. The POST has already succeeded by the time we get here, so the
+/// service was up a moment ago; we still cap consecutive connect failures so a
+/// service that dies mid-job can't hang the job forever -- exceeding the cap
+/// surfaces as `"error"`.
+fn run_progress_stream(app: &AppHandle, host: &str, job_id: &str) -> StreamOutcome {
     let url = format!("http://{host}:{PORT}/rotoscope/{job_id}/progress");
     // No read timeout: SSE is a long-lived stream that ticks intermittently.
     let client = match reqwest::blocking::Client::builder().build() {
         Ok(c) => c,
-        Err(_) => return "error".to_string(),
+        Err(_) => {
+            return StreamOutcome {
+                stage: "error".to_string(),
+                source_fps: None,
+            }
+        }
     };
 
     // ~60s of pure back-to-back connect failures (at the 250ms backoff) before we
     // give up and treat the job as errored.
     const MAX_CONNECT_FAILURES: u32 = 240;
     let mut connect_failures = 0u32;
+    // Last source fps seen across all ticks; retained across reconnects.
+    let mut source_fps: Option<f64> = None;
 
     loop {
         let resp = match client.get(&url).send() {
@@ -333,7 +359,10 @@ fn run_progress_stream(app: &AppHandle, host: &str, job_id: &str) -> String {
             _ => {
                 connect_failures += 1;
                 if connect_failures >= MAX_CONNECT_FAILURES {
-                    return "error".to_string();
+                    return StreamOutcome {
+                        stage: "error".to_string(),
+                        source_fps,
+                    };
                 }
                 std::thread::sleep(Duration::from_millis(250));
                 continue;
@@ -350,6 +379,9 @@ fn run_progress_stream(app: &AppHandle, host: &str, job_id: &str) -> String {
                 continue;
             }
             if let Ok(tick) = serde_json::from_str::<SseTick>(payload) {
+                if tick.source_fps.is_some() {
+                    source_fps = tick.source_fps;
+                }
                 let terminal = matches!(tick.stage.as_str(), "done" | "error" | "cancelled");
                 let stage = tick.stage.clone();
                 let _ = app.emit(
@@ -362,7 +394,7 @@ fn run_progress_stream(app: &AppHandle, host: &str, job_id: &str) -> String {
                     },
                 );
                 if terminal {
-                    return stage;
+                    return StreamOutcome { stage, source_fps };
                 }
             }
         }
@@ -568,8 +600,8 @@ fn rotoscope_blocking(
 
     // 3. Drive progress + wait for completion on the SSE stream. It forwards each
     //    tick as `roto://progress` and returns the terminal stage.
-    let terminal = run_progress_stream(&app, &host, &job_id);
-    match terminal.as_str() {
+    let outcome = run_progress_stream(&app, &host, &job_id);
+    match outcome.stage.as_str() {
         "done" => {}
         "cancelled" => return Err("rotoscope job was cancelled".to_string()),
         other => return Err(format!("rotoscope job failed (stage: {other})")),
@@ -599,6 +631,7 @@ fn rotoscope_blocking(
         model: fetch_model(&host),
         generated_at: iso8601_utc_now(),
         frame_count,
+        source_fps: outcome.source_fps,
     };
     let meta_json = serde_json::to_string_pretty(&meta)
         .map_err(|e| format!("failed to serialize meta.json: {e}"))?;

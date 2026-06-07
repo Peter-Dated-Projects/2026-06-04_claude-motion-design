@@ -306,6 +306,11 @@ async def rotoscope(
         shutil.rmtree(work_dir, ignore_errors=True)
         raise HTTPException(status_code=400, detail=f"could not read upload: {exc}")
 
+    # Record the probed source fps on the job so it rides every SSE snapshot --
+    # the Rust client reads it from the progress stream and writes it into
+    # meta.json (the outputs panel then plays back at the real rate, not 30fps).
+    job.update(source_fps=source_fps)
+
     if duration > config.MAX_VIDEO_SECONDS:
         job.update(stage="error", error="video too long")
         registry.remove(job_id)
