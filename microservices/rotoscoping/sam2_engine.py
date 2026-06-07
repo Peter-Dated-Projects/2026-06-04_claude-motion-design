@@ -235,9 +235,11 @@ def load_predictor():
             use_flash_attn=use_flash,
         )
     except ImportError:
-        # flash-attn package not installed; fall back to standard attention.
-        # Catch ImportError SPECIFICALLY, not bare Exception, so genuine SAM2
-        # build errors (wrong checkpoint path, config mismatch) still surface.
+        # flash-attn package not installed; the build tried to import it because
+        # use_flash_attn=True. Rebuild with use_flash_attn=False, which skips the
+        # import path entirely. Catch ImportError SPECIFICALLY, not bare
+        # Exception, so genuine SAM2 build errors (wrong checkpoint path, config
+        # mismatch) still surface.
         logger.warning(
             "flash-attn not available on this system; building without FlashAttention"
         )
@@ -246,6 +248,24 @@ def load_predictor():
             str(config.CHECKPOINT_PATH),
             device="cuda",
             use_flash_attn=False,
+        )
+    except TypeError as exc:
+        # The installed sam2 build's build_sam2_video_predictor signature doesn't
+        # accept use_flash_attn at all (the kwarg was added with the GPU probe and
+        # is unverified on this Mac). Passing use_flash_attn=False would raise the
+        # SAME TypeError, so the fallback must OMIT the kwarg entirely. Without
+        # this arm the build raises on exactly the flash-capable GPUs
+        # (Ada/Hopper/Blackwell) this targets, and main.py's lifespan handler only
+        # catches RuntimeError -> ungraceful startup crash.
+        logger.warning(
+            "build_sam2_video_predictor does not accept use_flash_attn "
+            "(signature mismatch: %s); building without it",
+            exc,
+        )
+        _predictor = build_sam2_video_predictor(
+            config.SAM2_CONFIG_NAME,
+            str(config.CHECKPOINT_PATH),
+            device="cuda",
         )
     logger.info("SAM2 predictor loaded")
     return _predictor

@@ -12,8 +12,11 @@ hardcoded with OS separators, so the same code runs on Windows or Linux.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger("rotoscoping.config")
 
 # --- Service ---------------------------------------------------------------
 
@@ -41,7 +44,20 @@ MAX_FRAME_SKIP: int = 10
 # throughput). The default 150 suits a 16GB card; an operator on a 24GB card can
 # try ROTO_CHUNK_SIZE=300. No automatic per-GPU tuning -- this env override is
 # the knob.
-CHUNK_SIZE: int = int(os.environ.get("ROTO_CHUNK_SIZE", "150"))
+#
+# Guarded: a non-numeric ROTO_CHUNK_SIZE would otherwise raise ValueError at
+# import and take the whole service down before it can log anything useful; fall
+# back to the default with a warning instead.
+_DEFAULT_CHUNK_SIZE = 150
+try:
+    CHUNK_SIZE: int = int(os.environ.get("ROTO_CHUNK_SIZE", str(_DEFAULT_CHUNK_SIZE)))
+except ValueError:
+    logger.warning(
+        "ROTO_CHUNK_SIZE=%r is not a valid integer; falling back to %d",
+        os.environ.get("ROTO_CHUNK_SIZE"),
+        _DEFAULT_CHUNK_SIZE,
+    )
+    CHUNK_SIZE = _DEFAULT_CHUNK_SIZE
 
 # --- Filesystem layout -----------------------------------------------------
 
