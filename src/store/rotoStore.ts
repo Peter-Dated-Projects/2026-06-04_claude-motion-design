@@ -152,6 +152,16 @@ export interface RotoState {
   /** Completed rotoscope jobs for the active project. */
   outputs: RotoOutputListItem[];
 
+  // --- Comparison cross-panel signal -----------------------------------------
+  /**
+   * Monotonic nonce bumped when the Outputs pane requests that the Video pane
+   * enter comparison mode for a freshly-loaded (sequence, source-clip) pair.
+   * The two panes are siblings with no shared parent, so this store field is the
+   * cross-panel channel. A nonce rather than a boolean so a repeat "Compare"
+   * click re-fires even when the user previously toggled comparison back off.
+   */
+  comparisonNonce: number;
+
   // --- Service-discovery actions ---------------------------------------------
   /** Record the startup /health probe result (availability + model/VRAM info). */
   setServiceAvailability: (status: RotoscopingStatus) => void;
@@ -160,6 +170,19 @@ export interface RotoState {
   /** Load a source video into the preview pane; resets start frame + points
    *  and clears any loaded output sequence. */
   loadVideo: (video: LoadedVideo) => void;
+  /**
+   * Load a source video for comparison WITHOUT clearing `loadedSequence` (the
+   * one difference from `loadVideo`).
+   *
+   * CALLER CONTRACT: this exists solely for the Outputs pane "Compare" button.
+   * Because it does not clear `loadedSequence`, the caller MUST set both sides
+   * together -- call `loadSequence(...)` and `loadVideoForComparison(...)` as an
+   * atomic pair in a single handler, never one without the other. Calling this
+   * twice in a row with two different videos would otherwise leave the first
+   * call's sequence paired with the second video, producing a mismatched pair.
+   * The regular `loadVideo` path still clears the sequence as before.
+   */
+  loadVideoForComparison: (video: LoadedVideo) => void;
   /** Load a completed output's PNG sequence for stop-motion playback. */
   loadSequence: (sequence: LoadedSequence) => void;
   /** Clear the loaded output sequence (returns to the source-video view). */
@@ -190,6 +213,11 @@ export interface RotoState {
   jobComplete: (result: RotoscopeResult) => void;
   /** Record a failure and enter `error`. */
   setError: (message: string) => void;
+
+  // --- Comparison cross-panel signal -----------------------------------------
+  /** Ask the Video pane to enter comparison mode (bumps `comparisonNonce`).
+   *  Pair with `loadSequence` + `loadVideoForComparison` in the same handler. */
+  requestComparison: () => void;
 
   // --- Outputs / lifecycle ---------------------------------------------------
   /** Replace the outputs list (enumerated from the project's assets). */
@@ -229,6 +257,7 @@ export const useRotoStore = create<RotoState>((set) => ({
   status: null,
   ...FRESH_SETUP,
   outputs: [],
+  comparisonNonce: 0,
 
   setServiceAvailability: (status) =>
     set({ serviceAvailable: status.available, status }),
@@ -247,6 +276,8 @@ export const useRotoStore = create<RotoState>((set) => ({
       phase: "idle",
       error: null,
     }),
+
+  loadVideoForComparison: (video) => set({ video }),
 
   loadSequence: (loadedSequence) => set({ loadedSequence }),
 
@@ -294,6 +325,9 @@ export const useRotoStore = create<RotoState>((set) => ({
     }),
 
   setError: (message) => set({ error: message, phase: "error", jobId: null }),
+
+  requestComparison: () =>
+    set((state) => ({ comparisonNonce: state.comparisonNonce + 1 })),
 
   setOutputs: (outputs) => set({ outputs }),
 

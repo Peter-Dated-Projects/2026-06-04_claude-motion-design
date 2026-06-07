@@ -363,6 +363,7 @@ function ClipRangeControl({
 export default function RotoVideoPanel() {
   const video = useRotoStore((s) => s.video);
   const loadedSequence = useRotoStore((s) => s.loadedSequence);
+  const comparisonNonce = useRotoStore((s) => s.comparisonNonce);
   const clearSequence = useRotoStore((s) => s.clearSequence);
   const startFrame = useRotoStore((s) => s.startFrame);
   const clipStart = useRotoStore((s) => s.clipStart);
@@ -417,6 +418,18 @@ export default function RotoVideoPanel() {
   useEffect(() => {
     if (!canCompare) setComparisonActive(false);
   }, [canCompare]);
+
+  // S5: the Outputs pane's "Compare" button loads a (sequence, source-clip) pair
+  // and bumps comparisonNonce to ask us to enter comparison mode automatically.
+  // Watch for the nonce changing (not its initial value, so a fresh mount with a
+  // stale nonce doesn't auto-open) and flip comparison on.
+  const lastComparisonNonce = useRef(comparisonNonce);
+  useEffect(() => {
+    if (comparisonNonce !== lastComparisonNonce.current) {
+      lastComparisonNonce.current = comparisonNonce;
+      setComparisonActive(true);
+    }
+  }, [comparisonNonce]);
 
   const toggleLayout = () => {
     setCompareLayout((prev) => {
