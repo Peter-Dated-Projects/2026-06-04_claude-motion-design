@@ -3,6 +3,9 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useRotoStore } from "../../store/rotoStore";
 import { useProjectStore } from "../../store/projectStore";
+import { TrashIcon } from "../icons";
+import RotoContextMenu from "./RotoContextMenu";
+import type { RotoContextMenuItem } from "./RotoContextMenu";
 
 /**
  * The rotoscoping stage's bottom-right "Rotoscope Outputs" pane.
@@ -48,6 +51,10 @@ interface RotoOutputFiles {
 /** Source fps assumed when converting frame_skip -> effective playback fps
  *  (matches RotoVideoPanel's ASSUMED_FPS and the proposal's 30fps estimates). */
 const ASSUMED_FPS = 30;
+
+/** localStorage key for the grid/list view toggle (mirrors RotoAssetsPanel's
+ *  rotoAssetsView; the two panels persist their view independently). */
+const VIEW_KEY = "claude-motion:rotoOutputsView";
 
 /** Effective stop-motion fps for an output: source fps / (frame_skip + 1).
  *  `sourceFps` is the probed source rate from meta.json; it falls back to the
@@ -95,6 +102,20 @@ export default function RotoOutputsPanel() {
   );
   // Per-row delete error (shown inline when the backend rejects the delete).
   const [deleteError, setDeleteError] = useState<Record<string, string | null>>({});
+
+  // Grid/list view, persisted to localStorage so it survives reloads.
+  const [view, setView] = useState<"list" | "grid">(() =>
+    localStorage.getItem(VIEW_KEY) === "grid" ? "grid" : "list",
+  );
+  useEffect(() => {
+    localStorage.setItem(VIEW_KEY, view);
+  }, [view]);
+
+  // Open right-click context menu: the folder dir it targets + the client point
+  // to anchor at, or null when no menu is open (only one menu open at a time).
+  const [menu, setMenu] = useState<{ dir: string; x: number; y: number } | null>(
+    null,
+  );
 
   const loadedSequenceDir = useRotoStore((s) => s.loadedSequence?.dir ?? null);
   const clearSequence = useRotoStore((s) => s.clearSequence);
@@ -313,6 +334,213 @@ export default function RotoOutputsPanel() {
     [],
   );
 
+  // Copy the folder name to the clipboard with brief "Copied!" feedback.
+  // Shared by the inline list Copy button and the context-menu "Copy name".
+  const copyName = useCallback((o: RotoOutput) => {
+    void navigator.clipboard
+      .writeText(o.name)
+      .then(() => {
+        setCopied((prev) => ({ ...prev, [o.dir]: true }));
+        setTimeout(
+          () => setCopied((prev) => ({ ...prev, [o.dir]: false })),
+          500,
+        );
+      })
+      .catch((err) => {
+        // Clipboard write can reject (permissions / no secure context).
+        // Surface it and keep the button out of the stuck 'Copied!' state.
+        console.error("copy name failed:", err);
+        setCopied((prev) => ({ ...prev, [o.dir]: false }));
+      });
+  }, []);
+
+  // Open the inline GIF/MP4/MOV format-picker for a row (reused by the inline
+  // path and the context menu's "Export as..." -- one picker, no duplicate UI).
+  const openExportPicker = useCallback((dir: string) => {
+    setExportError((prev) => ({ ...prev, [dir]: null }));
+    setExportState((prev) => ({ ...prev, [dir]: "picking" }));
+  }, []);
+
+  // Show the inline delete-confirmation prompt for a row (reused by the inline
+  // trash button and the context menu's "Delete"). The actual delete still runs
+  // only after the user confirms in that prompt.
+  const askDelete = useCallback((dir: string) => {
+    setDeleteError((prev) => ({ ...prev, [dir]: null }));
+    setConfirmingDelete((prev) => ({ ...prev, [dir]: true }));
+  }, []);
+
+  // Build the full context-menu action set for one output. Mirrors the spec
+  // order: Play | Compare | -- | Open folder | Open video | Export as... | --
+  // | Edit | Copy name | -- | Delete. Conditional actions are disabled (greyed)
+  // rather than hidden so the menu shape is stable across rows.
+  const menuItems = useCallback(
+    (o: RotoOutput): RotoContextMenuItem[] => {
+      const hasSource = Boolean(files[o.dir]?.sourceClip || o.source);
+      const video = files[o.dir]?.video ?? null;
+      return [
+        { type: "action", label: "Play", onClick: () => playOutput(o) },
+        {
+          type: "action",
+          label: "Compare",
+          disabled: !hasSource,
+          onClick: () => compareOutput(o),
+        },
+        { type: "separator" },
+        { type: "action", label: "Open folder", onClick: () => void open(o.dir) },
+        {
+          type: "action",
+          label: "Open video",
+          disabled: !video,
+          onClick: () => video && void open(video),
+        },
+        {
+          type: "action",
+          label: "Export as...",
+          onClick: () => openExportPicker(o.dir),
+        },
+        { type: "separator" },
+        { type: "action", label: "Edit", onClick: () => startRename(o) },
+        { type: "action", label: "Copy name", onClick: () => copyName(o) },
+        { type: "separator" },
+        {
+          type: "action",
+          label: "Delete",
+          danger: true,
+          onClick: () => askDelete(o.dir),
+        },
+      ];
+    },
+    [
+      files,
+      playOutput,
+      compareOutput,
+      open,
+      openExportPicker,
+      startRename,
+      copyName,
+      askDelete,
+    ],
+  );
+
+  // --- Shared per-row fragments, reused by both the list rows and grid cards
+  // so the rename / confirm-delete / export-picker behaviors are identical in
+  // either view (the spec relocates buttons but removes no capability).
+
+  const renderName = (o: RotoOutput) =>
+    renaming[o.dir] ? (
+      <input
+        className="roto-outputs__rename-input"
+        autoFocus
+        value={renameValue[o.dir] ?? o.name}
+        onChange={(e) =>
+          setRenameValue((prev) => ({ ...prev, [o.dir]: e.target.value }))
+        }
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void commitRename(o);
+          } else if (e.key === "Escape") {
+            cancelRename(o.dir);
+          }
+        }}
+        onBlur={() => void commitRename(o)}
+        onClick={(e) => e.stopPropagation()}
+      />
+    ) : (
+      <span className="roto-outputs__name">{o.name}</span>
+    );
+
+  const renderConfirm = (o: RotoOutput) => (
+    <div
+      className="roto-outputs__confirm"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <span className="roto-outputs__confirm-msg">
+        Delete? This removes all frames, the video, and the zip.
+      </span>
+      <button
+        type="button"
+        className="roto-outputs__btn roto-outputs__btn--danger"
+        onClick={(e) => {
+          e.stopPropagation();
+          void deleteOutput(o);
+        }}
+      >
+        Delete
+      </button>
+      <button
+        type="button"
+        className="roto-outputs__btn"
+        onClick={(e) => {
+          e.stopPropagation();
+          setConfirmingDelete((prev) => ({ ...prev, [o.dir]: false }));
+          setDeleteError((prev) => ({ ...prev, [o.dir]: null }));
+        }}
+      >
+        Cancel
+      </button>
+      {deleteError[o.dir] ? (
+        <span
+          className="roto-outputs__export-err"
+          title={deleteError[o.dir] ?? ""}
+        >
+          !
+        </span>
+      ) : null}
+    </div>
+  );
+
+  const renderPicker = (o: RotoOutput) => (
+    <span
+      className="roto-outputs__format-picker"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {(["GIF", "MP4", "MOV"] as const).map((fmt) => (
+        <button
+          key={fmt}
+          type="button"
+          className="roto-outputs__btn roto-outputs__btn--fmt"
+          onClick={(e) => {
+            e.stopPropagation();
+            void startExport(o.dir, o.name, fmt.toLowerCase());
+          }}
+        >
+          {fmt}
+        </button>
+      ))}
+      <button
+        type="button"
+        className="roto-outputs__btn"
+        title="Cancel"
+        onClick={(e) => {
+          e.stopPropagation();
+          setExportState((prev) => ({ ...prev, [o.dir]: "idle" }));
+        }}
+      >
+        x
+      </button>
+    </span>
+  );
+
+  // The transient export/delete UI a row shows in place of its normal actions:
+  // delete confirmation takes priority, then the format picker, then the
+  // "Exporting..." indicator. Returns null when none is active.
+  const renderTransient = (o: RotoOutput) => {
+    if (confirmingDelete[o.dir]) return renderConfirm(o);
+    if (exportState[o.dir] === "picking") return renderPicker(o);
+    if (exportState[o.dir] === "exporting")
+      return <span className="roto-outputs__exporting">Exporting...</span>;
+    return null;
+  };
+
+  const openMenu = (o: RotoOutput, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ dir: o.dir, x: e.clientX, y: e.clientY });
+  };
+
+  const menuOutput = menu ? outputs.find((o) => o.dir === menu.dir) ?? null : null;
+
   return (
     <div className="roto-outputs">
       <style>{STYLES}</style>
@@ -325,55 +553,32 @@ export default function RotoOutputsPanel() {
 
       {error ? <div className="roto-outputs__error">{error}</div> : null}
 
-      {outputs.length === 0 ? (
-        <div className="roto-outputs__hint">
-          Completed rotoscope jobs appear here.
-        </div>
-      ) : (
-        <ul className="roto-outputs__list">
-          {outputs.map((o) => (
-            <li
-              key={o.dir}
-              className="roto-outputs__row"
-              title={`${o.dir}\nDouble-click to play`}
-              onDoubleClick={() => playOutput(o)}
-            >
-              <div className="roto-outputs__thumb">
-                {o.thumbnail ? (
-                  <img
-                    src={convertFileSrc(o.thumbnail)}
-                    alt={o.name}
-                    loading="lazy"
-                    draggable={false}
-                  />
-                ) : null}
-              </div>
-              <div className="roto-outputs__meta">
-                {renaming[o.dir] ? (
-                  <input
-                    className="roto-outputs__rename-input"
-                    autoFocus
-                    value={renameValue[o.dir] ?? o.name}
-                    onChange={(e) =>
-                      setRenameValue((prev) => ({
-                        ...prev,
-                        [o.dir]: e.target.value,
-                      }))
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        void commitRename(o);
-                      } else if (e.key === "Escape") {
-                        cancelRename(o.dir);
-                      }
-                    }}
-                    onBlur={() => void commitRename(o)}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                ) : (
-                  <span className="roto-outputs__name">{o.name}</span>
-                )}
+      <div className="roto-outputs__scroll">
+        {outputs.length === 0 ? (
+          <div className="roto-outputs__hint">
+            Completed rotoscope jobs appear here.
+          </div>
+        ) : view === "grid" ? (
+          <ul className="roto-outputs__grid">
+            {outputs.map((o) => (
+              <li
+                key={o.dir}
+                className="roto-outputs__card"
+                title={`${o.dir}\nDouble-click to play, right-click for actions`}
+                onDoubleClick={() => playOutput(o)}
+                onContextMenu={(e) => openMenu(o, e)}
+              >
+                <div className="roto-outputs__card-thumb">
+                  {o.thumbnail ? (
+                    <img
+                      src={convertFileSrc(o.thumbnail)}
+                      alt={o.name}
+                      loading="lazy"
+                      draggable={false}
+                    />
+                  ) : null}
+                </div>
+                {renderName(o)}
                 {renameError[o.dir] ? (
                   <span
                     className="roto-outputs__rename-err"
@@ -385,185 +590,7 @@ export default function RotoOutputsPanel() {
                 <span className="roto-outputs__frames">
                   {o.frameCount} {o.frameCount === 1 ? "frame" : "frames"}
                 </span>
-                {o.source ? (
-                  <span className="roto-outputs__source-line" title={o.source}>
-                    {"source: "}
-                    <span className="roto-outputs__source">
-                      {o.source.split(/[/\\]/).pop() ?? o.source}
-                    </span>
-                  </span>
-                ) : null}
-              </div>
-              <button
-                type="button"
-                className="roto-outputs__rename-btn"
-                title="Copy name"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void navigator.clipboard
-                    .writeText(o.name)
-                    .then(() => {
-                      setCopied((prev) => ({ ...prev, [o.dir]: true }));
-                      setTimeout(
-                        () => setCopied((prev) => ({ ...prev, [o.dir]: false })),
-                        500,
-                      );
-                    })
-                    .catch((err) => {
-                      // Clipboard write can reject (permissions / no secure
-                      // context). Surface it and keep the button out of the
-                      // stuck 'Copied!' state.
-                      console.error("copy name failed:", err);
-                      setCopied((prev) => ({ ...prev, [o.dir]: false }));
-                    });
-                }}
-              >
-                {copied[o.dir] ? "Copied!" : "Copy"}
-              </button>
-              <button
-                type="button"
-                className="roto-outputs__rename-btn"
-                title="Rename"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  startRename(o);
-                }}
-              >
-                Edit
-              </button>
-              {confirmingDelete[o.dir] ? (
-                <div
-                  className="roto-outputs__confirm"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <span className="roto-outputs__confirm-msg">
-                    Delete? This removes all frames, the video, and the zip.
-                  </span>
-                  <button
-                    type="button"
-                    className="roto-outputs__btn roto-outputs__btn--danger"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void deleteOutput(o);
-                    }}
-                  >
-                    Delete
-                  </button>
-                  <button
-                    type="button"
-                    className="roto-outputs__btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setConfirmingDelete((prev) => ({ ...prev, [o.dir]: false }));
-                      setDeleteError((prev) => ({ ...prev, [o.dir]: null }));
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  {deleteError[o.dir] ? (
-                    <span
-                      className="roto-outputs__export-err"
-                      title={deleteError[o.dir] ?? ""}
-                    >
-                      !
-                    </span>
-                  ) : null}
-                </div>
-              ) : (
-              <div className="roto-outputs__actions">
-                <button
-                  type="button"
-                  className="roto-outputs__btn"
-                  title="Open folder"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void open(o.dir);
-                  }}
-                >
-                  Open folder
-                </button>
-                {files[o.dir]?.sourceClip || o.source ? (
-                  <button
-                    type="button"
-                    className="roto-outputs__btn"
-                    title={
-                      files[o.dir]?.sourceClip
-                        ? "Compare against the processed source clip"
-                        : "Compare against the original source video"
-                    }
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      compareOutput(o);
-                    }}
-                  >
-                    Compare
-                  </button>
-                ) : null}
-                {files[o.dir]?.video ? (
-                  <button
-                    type="button"
-                    className="roto-outputs__btn"
-                    title="Open video"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void open(files[o.dir].video as string);
-                    }}
-                  >
-                    Open video
-                  </button>
-                ) : null}
-                {exportState[o.dir] === "exporting" ? (
-                  <span className="roto-outputs__exporting">Exporting...</span>
-                ) : exportState[o.dir] === "picking" ? (
-                  <span
-                    className="roto-outputs__format-picker"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {(["GIF", "MP4", "MOV"] as const).map((fmt) => (
-                      <button
-                        key={fmt}
-                        type="button"
-                        className="roto-outputs__btn roto-outputs__btn--fmt"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void startExport(o.dir, o.name, fmt.toLowerCase());
-                        }}
-                      >
-                        {fmt}
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      className="roto-outputs__btn"
-                      title="Cancel"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setExportState((prev) => ({
-                          ...prev,
-                          [o.dir]: "idle",
-                        }));
-                      }}
-                    >
-                      x
-                    </button>
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    className="roto-outputs__btn"
-                    title="Export as GIF, MP4, or MOV"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setExportError((prev) => ({ ...prev, [o.dir]: null }));
-                      setExportState((prev) => ({
-                        ...prev,
-                        [o.dir]: "picking",
-                      }));
-                    }}
-                  >
-                    Export as...
-                  </button>
-                )}
+                {renderTransient(o)}
                 {exportError[o.dir] ? (
                   <span
                     className="roto-outputs__export-err"
@@ -572,24 +599,172 @@ export default function RotoOutputsPanel() {
                     !
                   </span>
                 ) : null}
-                <button
-                  type="button"
-                  className="roto-outputs__btn roto-outputs__btn--danger"
-                  title="Delete output"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setDeleteError((prev) => ({ ...prev, [o.dir]: null }));
-                    setConfirmingDelete((prev) => ({ ...prev, [o.dir]: true }));
-                  }}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <ul className="roto-outputs__list">
+            {outputs.map((o) => {
+              const hasSource = Boolean(files[o.dir]?.sourceClip || o.source);
+              return (
+                <li
+                  key={o.dir}
+                  className="roto-outputs__row"
+                  title={`${o.dir}\nDouble-click to play, right-click for actions`}
+                  onDoubleClick={() => playOutput(o)}
+                  onContextMenu={(e) => openMenu(o, e)}
                 >
-                  Delete
-                </button>
-              </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
+                  <div className="roto-outputs__thumb">
+                    {o.thumbnail ? (
+                      <img
+                        src={convertFileSrc(o.thumbnail)}
+                        alt={o.name}
+                        loading="lazy"
+                        draggable={false}
+                      />
+                    ) : null}
+                  </div>
+                  <div className="roto-outputs__meta">
+                    {renderName(o)}
+                    {renameError[o.dir] ? (
+                      <span
+                        className="roto-outputs__rename-err"
+                        title={renameError[o.dir] ?? ""}
+                      >
+                        {renameError[o.dir]}
+                      </span>
+                    ) : null}
+                    <span className="roto-outputs__frames">
+                      {o.frameCount} {o.frameCount === 1 ? "frame" : "frames"}
+                    </span>
+                    {o.source ? (
+                      <span className="roto-outputs__source-line" title={o.source}>
+                        {"source: "}
+                        <span className="roto-outputs__source">
+                          {o.source.split(/[/\\]/).pop() ?? o.source}
+                        </span>
+                      </span>
+                    ) : null}
+                  </div>
+                  {confirmingDelete[o.dir] ? (
+                    renderConfirm(o)
+                  ) : (
+                    <div className="roto-outputs__actions">
+                      {exportState[o.dir] === "picking" ? (
+                        renderPicker(o)
+                      ) : exportState[o.dir] === "exporting" ? (
+                        <span className="roto-outputs__exporting">
+                          Exporting...
+                        </span>
+                      ) : (
+                        <>
+                          {hasSource ? (
+                            <button
+                              type="button"
+                              className="roto-outputs__btn"
+                              title={
+                                files[o.dir]?.sourceClip
+                                  ? "Compare against the processed source clip"
+                                  : "Compare against the original source video"
+                              }
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                compareOutput(o);
+                              }}
+                            >
+                              Compare
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="roto-outputs__btn"
+                            title="Rename"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              startRename(o);
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="roto-outputs__btn"
+                            title="Copy name"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              copyName(o);
+                            }}
+                          >
+                            {copied[o.dir] ? "Copied!" : "Copy"}
+                          </button>
+                          <button
+                            type="button"
+                            className="roto-outputs__btn roto-outputs__btn--danger roto-outputs__trash"
+                            title="Delete output"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              askDelete(o.dir);
+                            }}
+                          >
+                            <TrashIcon size={13} />
+                          </button>
+                        </>
+                      )}
+                      {exportError[o.dir] ? (
+                        <span
+                          className="roto-outputs__export-err"
+                          title={exportError[o.dir] ?? ""}
+                        >
+                          !
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      {outputs.length > 0 ? (
+        <div className="roto-outputs__toolbar">
+          <div className="roto-outputs__toolbar-side" />
+          <div className="roto-outputs__toolbar-side">
+            <button
+              type="button"
+              className={
+                "roto-outputs__tool-btn" +
+                (view === "list" ? " roto-outputs__tool-btn--active" : "")
+              }
+              title="List view"
+              onClick={() => setView("list")}
+            >
+              List
+            </button>
+            <button
+              type="button"
+              className={
+                "roto-outputs__tool-btn" +
+                (view === "grid" ? " roto-outputs__tool-btn--active" : "")
+              }
+              title="Grid view"
+              onClick={() => setView("grid")}
+            >
+              Grid
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {menu && menuOutput ? (
+        <RotoContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItems(menuOutput)}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -641,13 +816,59 @@ const STYLES = `
   line-height: 1.6;
   text-align: center;
 }
-.roto-outputs__list {
+.roto-outputs__scroll {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+}
+.roto-outputs__list {
   list-style: none;
   margin: 0;
   padding: 4px 0;
+}
+.roto-outputs__grid {
+  margin: 0;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+  align-content: start;
+  list-style: none;
+}
+.roto-outputs__card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.roto-outputs__card:hover {
+  background: var(--surface);
+}
+.roto-outputs__card-thumb {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  /* Checkerboard so transparent rotoscope PNGs read as cut-outs, not blank. */
+  background-image:
+    linear-gradient(45deg, var(--border-soft) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--border-soft) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--border-soft) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--border-soft) 75%);
+  background-size: 10px 10px;
+  background-position: 0 0, 0 5px, 5px -5px, -5px 0;
+}
+.roto-outputs__card-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 .roto-outputs__row {
   display: flex;
@@ -778,9 +999,34 @@ const STYLES = `
   font-weight: bold;
   cursor: default;
 }
-.roto-outputs__rename-btn {
+.roto-outputs__trash {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 6px;
+}
+.roto-outputs__trash svg {
+  display: block;
+}
+.roto-outputs__toolbar {
   flex: none;
-  padding: 3px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--surface-alt);
+}
+.roto-outputs__toolbar-side {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.roto-outputs__tool-btn {
+  flex: none;
+  padding: 2px 8px;
   font: inherit;
   font-size: 10px;
   color: var(--text-muted);
@@ -788,15 +1034,15 @@ const STYLES = `
   border: 1px solid var(--border-soft);
   border-radius: 3px;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.1s;
 }
-.roto-outputs__row:hover .roto-outputs__rename-btn {
-  opacity: 1;
-}
-.roto-outputs__rename-btn:hover {
+.roto-outputs__tool-btn:hover {
   color: var(--text);
   border-color: var(--text-faint);
+}
+.roto-outputs__tool-btn--active {
+  color: var(--text);
+  border-color: var(--text-faint);
+  background: var(--surface-alt);
 }
 .roto-outputs__rename-input {
   font: inherit;
