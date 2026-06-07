@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { useThemeStore, type Theme } from "../store/themeStore";
+import { useRotoStore } from "../store/rotoStore";
+import type { RotoscopingStatus } from "../types/roto";
 import { SunIcon, MoonIcon, CloseIcon } from "./icons";
 
 // Settings panel (gear icon). Read-only diagnostics about the local Claude setup:
@@ -159,6 +161,8 @@ function segBtn(active: boolean): React.CSSProperties {
   };
 }
 
+const ROTO_HOST_KEY = "claude-motion:rotoHost";
+
 function Settings({ open, onClose }: SettingsProps) {
   const theme = useThemeStore((s) => s.theme);
   const setTheme = useThemeStore((s) => s.setTheme);
@@ -169,6 +173,10 @@ function Settings({ open, onClose }: SettingsProps) {
   const [version, setVersion] = useState<string>("");
   const [skillsPath, setSkillsPath] = useState<string>("");
   const [mcpPath, setMcpPath] = useState<string>("");
+  const [rotoHost, setRotoHost] = useState("");
+  const [rotoStatus, setRotoStatus] = useState<RotoscopingStatus | null>(null);
+  const [rotoPinging, setRotoPinging] = useState(false);
+  const setServiceAvailability = useRotoStore((s) => s.setServiceAvailability);
 
   const recheckClaude = useCallback(async (syncInput = false) => {
     setChecking(true);
@@ -205,8 +213,13 @@ function Settings({ open, onClose }: SettingsProps) {
 
   // Load diagnostics each time the panel opens, so a freshly installed CLI or a
   // login change is reflected without restarting the app.
+  const rotoServiceAvailable = useRotoStore((s) => s.serviceAvailable);
+
   useEffect(() => {
     if (!open) return;
+    setRotoHost(localStorage.getItem(ROTO_HOST_KEY) ?? "");
+    // Seed the status dot from the last known store state so it isn't blank on open.
+    setRotoStatus(rotoServiceAvailable ? { available: true } : null);
     void recheckClaude(true);
     getVersion()
       .then(setVersion)
@@ -232,6 +245,30 @@ function Settings({ open, onClose }: SettingsProps) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  // Strip http(s):// prefix and any trailing :port so the Rust command gets a
+  // bare host/IP (it constructs http://{host}:7080/health itself).
+  const normaliseHost = (raw: string): string =>
+    raw.trim().replace(/^https?:\/\//i, "").replace(/:\d+$/, "").trim();
+
+  const pingRoto = useCallback(async (rawHost: string) => {
+    const host = normaliseHost(rawHost) || "localhost";
+    localStorage.setItem(ROTO_HOST_KEY, host);
+    setRotoHost(host);
+    setRotoPinging(true);
+    setRotoStatus(null);
+    try {
+      const status = await invoke<RotoscopingStatus>("check_rotoscoping_service", { host });
+      setRotoStatus(status);
+      setServiceAvailability(status);
+    } catch {
+      const offline = { available: false };
+      setRotoStatus(offline);
+      setServiceAvailability(offline);
+    } finally {
+      setRotoPinging(false);
+    }
+  }, [setServiceAvailability]);
 
   if (!open) return null;
 
@@ -343,6 +380,45 @@ function Settings({ open, onClose }: SettingsProps) {
               Clear
             </button>
           </div>
+        </div>
+
+        <div style={ROW}>
+          <span style={LABEL}>Rotoscoping backend</span>
+          <div style={{ display: "flex", gap: 6, marginTop: 4, alignItems: "center" }}>
+            <input
+              style={PATH_INPUT}
+              type="text"
+              spellCheck={false}
+              placeholder="localhost or 100.70.106.65"
+              value={rotoHost}
+              onChange={(e) => setRotoHost(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void pingRoto(rotoHost);
+                }
+              }}
+            />
+            <button
+              type="button"
+              style={{ ...SMALL_BTN, minWidth: 52 }}
+              disabled={rotoPinging}
+              onClick={() => void pingRoto(rotoHost)}
+            >
+              {rotoPinging ? "..." : "Ping"}
+            </button>
+          </div>
+          {rotoStatus != null && (
+            <span style={{ ...VALUE, marginTop: 4, fontSize: 12 }}>
+              <span style={dot(rotoStatus.available)} />
+              {rotoStatus.available
+                ? `Reachable${rotoStatus.model ? ` — ${rotoStatus.model}` : ""}${rotoStatus.vramUsedGb != null ? ` (${rotoStatus.vramUsedGb}/${rotoStatus.vramTotalGb} GB VRAM)` : ""}`
+                : "Unreachable — rotoscoping stage will be hidden"}
+            </span>
+          )}
+          <span style={{ ...LABEL, textTransform: "none", marginTop: 4 }}>
+            Host or IP of the SAM2 service (port 7080). http:// and port are added automatically.
+          </span>
         </div>
 
         <div style={ROW}>
