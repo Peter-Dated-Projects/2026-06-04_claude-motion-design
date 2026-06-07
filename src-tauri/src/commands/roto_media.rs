@@ -581,15 +581,18 @@ pub fn rename_rotoscope_output(old_dir: String, new_name: String) -> Result<Stri
 
 /// Delete a rotoscope output folder and everything in it.
 ///
-/// Path-traversal guard: `dir` is canonicalized, then accepted ONLY when its
-/// parent directory is named `assets` AND its own leaf name starts with
-/// `rotoscope_` -- i.e. it is one of the `<project>/assets/rotoscope_*/` folders
-/// this module enumerates, never an arbitrary path. This keeps the destructive
-/// `remove_dir_all` from ever escaping a project's assets directory even though
-/// the command takes a bare absolute path (matching `rename_rotoscope_output`'s
-/// dir-only signature). Errors if the directory does not exist or fails the guard.
+/// Path-traversal guard (project-scoped): `dir` is canonicalized, then accepted
+/// ONLY when its parent is the *resolved active project's* `assets` directory
+/// (`project_dir(app, slug)/assets`, canonicalized) AND its own leaf name starts
+/// with `rotoscope_` -- i.e. it is one of the `<project>/assets/rotoscope_*/`
+/// folders this module enumerates for that project, never an arbitrary path. The
+/// `slug` re-derives the project root exactly like the sibling read command
+/// (`list_rotoscope_outputs`) so a hostile/malformed `dir` cannot escape to some
+/// other `*/assets/rotoscope_*` outside the current project. Keeping the
+/// `rotoscope_` leaf check as well is defense in depth. Errors if the directory
+/// does not exist or fails the guard.
 #[tauri::command]
-pub fn delete_rotoscope_output(dir: String) -> Result<(), String> {
+pub fn delete_rotoscope_output(app: AppHandle, slug: String, dir: String) -> Result<(), String> {
     let path = Path::new(&dir);
     if !path.is_dir() {
         return Err(format!("not a directory: {dir}"));
@@ -599,6 +602,13 @@ pub fn delete_rotoscope_output(dir: String) -> Result<(), String> {
         .canonicalize()
         .map_err(|e| format!("failed to resolve {dir}: {e}"))?;
 
+    // Resolve the project's own assets dir and canonicalize it, so the comparison
+    // is symlink/`..`-stable on both sides.
+    let assets_dir = project_dir(&app, &slug)?.join("assets");
+    let assets_canonical = assets_dir
+        .canonicalize()
+        .map_err(|e| format!("failed to resolve project assets dir: {e}"))?;
+
     let leaf_ok = canonical
         .file_name()
         .and_then(|n| n.to_str())
@@ -606,13 +616,11 @@ pub fn delete_rotoscope_output(dir: String) -> Result<(), String> {
         .unwrap_or(false);
     let parent_ok = canonical
         .parent()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .map(|n| n == "assets")
+        .map(|p| p == assets_canonical)
         .unwrap_or(false);
     if !leaf_ok || !parent_ok {
         return Err(format!(
-            "refusing to delete '{dir}': not a rotoscope output under an assets/ directory"
+            "refusing to delete '{dir}': not a rotoscope output under project '{slug}'s assets directory"
         ));
     }
 

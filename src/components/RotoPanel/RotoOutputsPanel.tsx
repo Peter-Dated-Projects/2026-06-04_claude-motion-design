@@ -182,8 +182,12 @@ export default function RotoOutputsPanel() {
   const deleteOutput = useCallback(
     async (o: RotoOutput) => {
       setDeleteError((prev) => ({ ...prev, [o.dir]: null }));
+      if (!slug) {
+        setDeleteError((prev) => ({ ...prev, [o.dir]: "no active project" }));
+        return;
+      }
       try {
-        await invoke("delete_rotoscope_output", { dir: o.dir });
+        await invoke("delete_rotoscope_output", { slug, dir: o.dir });
         if (loadedSequenceDir === o.dir) clearSequence();
         setOutputs((prev) => prev.filter((item) => item.dir !== o.dir));
         setFiles((prev) => {
@@ -197,7 +201,7 @@ export default function RotoOutputsPanel() {
         setDeleteError((prev) => ({ ...prev, [o.dir]: String(err) }));
       }
     },
-    [loadedSequenceDir, clearSequence],
+    [slug, loadedSequenceDir, clearSequence],
   );
 
   // Open a file/folder with the OS default handler. stopPropagation in the
@@ -380,18 +384,15 @@ export default function RotoOutputsPanel() {
                 ) : null}
                 <span className="roto-outputs__frames">
                   {o.frameCount} {o.frameCount === 1 ? "frame" : "frames"}
-                  {o.source ? (
-                    <>
-                      {"  |  source: "}
-                      <span
-                        className="roto-outputs__source"
-                        title={o.source}
-                      >
-                        {o.source.split(/[/\\]/).pop() ?? o.source}
-                      </span>
-                    </>
-                  ) : null}
                 </span>
+                {o.source ? (
+                  <span className="roto-outputs__source-line" title={o.source}>
+                    {"source: "}
+                    <span className="roto-outputs__source">
+                      {o.source.split(/[/\\]/).pop() ?? o.source}
+                    </span>
+                  </span>
+                ) : null}
               </div>
               <button
                 type="button"
@@ -399,13 +400,22 @@ export default function RotoOutputsPanel() {
                 title="Copy name"
                 onClick={(e) => {
                   e.stopPropagation();
-                  void navigator.clipboard.writeText(o.name).then(() => {
-                    setCopied((prev) => ({ ...prev, [o.dir]: true }));
-                    setTimeout(
-                      () => setCopied((prev) => ({ ...prev, [o.dir]: false })),
-                      500,
-                    );
-                  });
+                  void navigator.clipboard
+                    .writeText(o.name)
+                    .then(() => {
+                      setCopied((prev) => ({ ...prev, [o.dir]: true }));
+                      setTimeout(
+                        () => setCopied((prev) => ({ ...prev, [o.dir]: false })),
+                        500,
+                      );
+                    })
+                    .catch((err) => {
+                      // Clipboard write can reject (permissions / no secure
+                      // context). Surface it and keep the button out of the
+                      // stuck 'Copied!' state.
+                      console.error("copy name failed:", err);
+                      setCopied((prev) => ({ ...prev, [o.dir]: false }));
+                    });
                 }}
               >
                 {copied[o.dir] ? "Copied!" : "Copy"}
@@ -710,6 +720,16 @@ const STYLES = `
 .roto-outputs__frames {
   color: var(--text-faint);
   font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.roto-outputs__source-line {
+  /* Own line below the frame count so the basename isn't eaten by the
+     frames-row ellipsis; still truncates on its own if the path is long. */
+  color: var(--text-faint);
+  font-size: 10px;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
