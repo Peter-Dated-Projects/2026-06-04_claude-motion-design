@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useProjectStore } from "../../store/projectStore";
 import { useRotoStore } from "../../store/rotoStore";
+import { TrashIcon } from "../icons";
+import RotoContextMenu from "./RotoContextMenu";
 
 /**
  * The rotoscoping stage's top-right "Project Assets" pane.
@@ -22,7 +27,7 @@ import { useRotoStore } from "../../store/rotoStore";
  * AssetsView). Images are display-only here; they are not a valid rotoscope
  * source (the source must be a video), so they have no load action.
  *
- * A bottom toolbar filters (by path, case-insensitive), sorts (name asc/desc),
+ * A bottom toolbar filters (by filename, case-insensitive), sorts (name asc/desc),
  * and switches between a compact list and a thumbnail grid. View mode and grid
  * zoom persist in localStorage; filter/sort are pure in-render transforms over
  * the raw video + image lists (no backend round-trip).
@@ -53,6 +58,12 @@ const ZOOM_MAX = 120;
 const ZOOM_STEP = 16;
 const ZOOM_DEFAULT = 72;
 
+/** Per-project key for the last-loaded source video, so it can be restored on
+ *  the next mount (proposal item 3). Written on load, cleared on reset. */
+function loadedVideoKey(slug: string): string {
+  return `roto:loadedVideo:${slug}`;
+}
+
 function basename(p: string): string {
   return p.split(/[/\\]/).pop() ?? p;
 }
@@ -74,6 +85,15 @@ export default function RotoAssetsPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Visual single-click selection (item 2) -- purely cosmetic, no action.
+  const [selectedVideoPath, setSelectedVideoPath] = useState<string | null>(
+    null,
+  );
+  // Open right-click context menu (item 8): captured cursor point + target row.
+  const [menu, setMenu] = useState<{ x: number; y: number; path: string } | null>(
+    null,
+  );
+
   // Toolbar state -- all local; filter/sort are pure in-render transforms.
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<"name-asc" | "name-desc">("name-asc");
@@ -94,6 +114,24 @@ export default function RotoAssetsPanel() {
     localStorage.setItem(ZOOM_KEY, String(zoom));
   }, [zoom]);
 
+  // Load a video into the left pane AND remember it as this project's
+  // last-loaded source (item 3). Every load path routes through here so the
+  // persisted key never drifts from what is actually loaded.
+  const loadVideoPath = useCallback(
+    (path: string) => {
+      if (slug) localStorage.setItem(loadedVideoKey(slug), path);
+      loadVideo({ path });
+    },
+    [slug, loadVideo],
+  );
+
+  // Session-only unload + forget the persisted choice, so the next mount does
+  // not restore it. Mirrors loadVideoPath's key write (item 3).
+  const clearLoadedVideo = useCallback(() => {
+    if (slug) localStorage.removeItem(loadedVideoKey(slug));
+    resetRoto();
+  }, [slug, resetRoto]);
+
   const refresh = useCallback(async () => {
     if (!slug) {
       setAssets([]);
@@ -109,6 +147,17 @@ export default function RotoAssetsPanel() {
       ]);
       setAssets(imgs);
       setProjectVideos(vids);
+      // Restore the last-loaded video (item 3): only if it is still a
+      // registered video and isn't already the loaded source -- reloading the
+      // same path would needlessly reset the in-progress setup.
+      const stored = localStorage.getItem(loadedVideoKey(slug));
+      if (
+        stored &&
+        vids.some((v) => v.path === stored) &&
+        useRotoStore.getState().video?.path !== stored
+      ) {
+        loadVideoPath(stored);
+      }
     } catch (err) {
       setError(String(err));
       setAssets([]);
@@ -116,7 +165,7 @@ export default function RotoAssetsPanel() {
     } finally {
       setLoading(false);
     }
-  }, [slug]);
+  }, [slug, loadVideoPath]);
 
   useEffect(() => {
     void refresh();
@@ -139,9 +188,9 @@ export default function RotoAssetsPanel() {
         setError(String(err));
       }
     }
-    loadVideo({ path: selected });
+    loadVideoPath(selected);
     void refresh();
-  }, [loadVideo, slug, refresh]);
+  }, [loadVideoPath, slug, refresh]);
 
   // Remove a registered video from the project. If it is the currently-loaded
   // source, also reset the session so the left pane does not keep playing it.
@@ -150,13 +199,14 @@ export default function RotoAssetsPanel() {
       if (!slug) return;
       try {
         await invoke("remove_project_video", { slug, path });
-        if (video?.path === path) resetRoto();
+        if (video?.path === path) clearLoadedVideo();
+        if (selectedVideoPath === path) setSelectedVideoPath(null);
         void refresh();
       } catch (err) {
         setError(String(err));
       }
     },
-    [slug, video, resetRoto, refresh],
+    [slug, video, clearLoadedVideo, selectedVideoPath, refresh],
   );
 
   // Ctrl +/- adjust grid column min-width while the panel is focused; no effect
@@ -179,7 +229,7 @@ export default function RotoAssetsPanel() {
   const q = search.trim().toLowerCase();
   const dir = sort === "name-asc" ? 1 : -1;
   const filteredVideos = projectVideos
-    .filter((v) => v.path.toLowerCase().includes(q))
+    .filter((v) => basename(v.path).toLowerCase().includes(q))
     .sort((a, b) => dir * basename(a.path).localeCompare(basename(b.path)));
   const filteredImages = assets
     .filter((a) => a.name.toLowerCase().includes(q))
@@ -191,6 +241,26 @@ export default function RotoAssetsPanel() {
     video != null && projectVideos.some((v) => v.path === video.path);
 
   const isEmpty = filteredVideos.length === 0 && filteredImages.length === 0;
+
+  // Row interactions shared by the list and grid renderers.
+  // Single-click selects (visual only, item 2); double-click loads unless it is
+  // already the loaded source (item 1); right-click opens the context menu and
+  // also selects the row it targets (item 8).
+  const selectRow = useCallback((path: string) => setSelectedVideoPath(path), []);
+  const loadOnDoubleClick = useCallback(
+    (path: string) => {
+      if (video?.path !== path) loadVideoPath(path);
+    },
+    [video, loadVideoPath],
+  );
+  const openMenu = useCallback(
+    (e: ReactMouseEvent, path: string) => {
+      e.preventDefault();
+      setSelectedVideoPath(path);
+      setMenu({ x: e.clientX, y: e.clientY, path });
+    },
+    [],
+  );
 
   return (
     <div className="roto-assets" tabIndex={0} onKeyDown={onKeyDown}>
@@ -208,7 +278,13 @@ export default function RotoAssetsPanel() {
 
       {error ? <div className="roto-assets__error">{error}</div> : null}
 
-      <div className="roto-assets__content">
+      <div
+        className="roto-assets__content"
+        // Clicking empty list area (not a row) clears the visual selection.
+        onClick={(e) => {
+          if (e.target === e.currentTarget) setSelectedVideoPath(null);
+        }}
+      >
         {video && !loadedInList ? (
           <div className="roto-assets__video-row roto-assets__video-row--loaded">
             <div className="roto-assets__video-info">
@@ -225,7 +301,7 @@ export default function RotoAssetsPanel() {
             <button
               type="button"
               className="roto-assets__video-clear"
-              onClick={resetRoto}
+              onClick={clearLoadedVideo}
             >
               Clear
             </button>
@@ -251,62 +327,147 @@ export default function RotoAssetsPanel() {
         ) : (
           <>
             {filteredVideos.length > 0 ? (
-              <ul className="roto-assets__videos">
-                {filteredVideos.map((v) => {
-                  const loaded = video?.path === v.path;
-                  return (
-                    <li
-                      key={v.path}
-                      className={
-                        "roto-assets__video-row" +
-                        (loaded ? " roto-assets__video-row--loaded" : "")
-                      }
-                    >
-                      <div className="roto-assets__video-info">
-                        <span className="roto-assets__video-badge">VIDEO</span>
-                        <span
-                          className="roto-assets__video-name"
-                          title={v.path}
-                        >
+              view === "grid" ? (
+                <ul
+                  className="roto-assets__grid"
+                  style={{
+                    gridTemplateColumns: `repeat(auto-fill, minmax(${zoom}px, 1fr))`,
+                  }}
+                >
+                  {filteredVideos.map((v) => {
+                    const loaded = video?.path === v.path;
+                    const selected = selectedVideoPath === v.path;
+                    return (
+                      <li
+                        key={v.path}
+                        className={
+                          "roto-assets__vcard" +
+                          (loaded ? " roto-assets__vcard--loaded" : "") +
+                          (selected ? " roto-assets__vcard--selected" : "")
+                        }
+                        title={v.path}
+                        onClick={() => selectRow(v.path)}
+                        onDoubleClick={() => loadOnDoubleClick(v.path)}
+                        onContextMenu={(e) => openMenu(e, v.path)}
+                      >
+                        <div className="roto-assets__vthumb">
+                          <span className="roto-assets__video-badge">VIDEO</span>
+                          <button
+                            type="button"
+                            className="roto-assets__vthumb-trash"
+                            title="Remove from project"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void removeVideo(v.path);
+                            }}
+                          >
+                            <TrashIcon size={13} />
+                          </button>
+                          <div className="roto-assets__vthumb-overlay">
+                            {loaded ? (
+                              <button
+                                type="button"
+                                className="roto-assets__video-clear"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  clearLoadedVideo();
+                                }}
+                              >
+                                Clear
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="roto-assets__btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  loadVideoPath(v.path);
+                                }}
+                              >
+                                Load
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <span className="roto-assets__name">
                           {basename(v.path)}
                         </span>
-                        {loaded && video?.durationSeconds !== undefined ? (
-                          <span className="roto-assets__video-dur">
-                            {formatDuration(video.durationSeconds)}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <ul className="roto-assets__videos">
+                  {filteredVideos.map((v) => {
+                    const loaded = video?.path === v.path;
+                    const selected = selectedVideoPath === v.path;
+                    return (
+                      <li
+                        key={v.path}
+                        className={
+                          "roto-assets__video-row" +
+                          (loaded ? " roto-assets__video-row--loaded" : "") +
+                          (selected ? " roto-assets__video-row--selected" : "")
+                        }
+                        onClick={() => selectRow(v.path)}
+                        onDoubleClick={() => loadOnDoubleClick(v.path)}
+                        onContextMenu={(e) => openMenu(e, v.path)}
+                      >
+                        <div className="roto-assets__video-info">
+                          <span className="roto-assets__video-badge">VIDEO</span>
+                          <span
+                            className="roto-assets__video-name"
+                            title={v.path}
+                          >
+                            {basename(v.path)}
                           </span>
-                        ) : null}
-                      </div>
-                      <div className="roto-assets__video-actions">
-                        {loaded ? (
+                          {loaded && video?.durationSeconds !== undefined ? (
+                            <span className="roto-assets__video-dur">
+                              {formatDuration(video.durationSeconds)}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="roto-assets__video-actions">
+                          {loaded ? (
+                            <button
+                              type="button"
+                              className="roto-assets__video-clear"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                clearLoadedVideo();
+                              }}
+                            >
+                              Clear
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="roto-assets__btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                loadVideoPath(v.path);
+                              }}
+                            >
+                              Load
+                            </button>
+                          )}
                           <button
                             type="button"
-                            className="roto-assets__video-clear"
-                            onClick={resetRoto}
+                            className="roto-assets__btn roto-assets__remove"
+                            title="Remove from project"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void removeVideo(v.path);
+                            }}
                           >
-                            Clear
+                            <TrashIcon size={13} />
                           </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className="roto-assets__btn"
-                            onClick={() => loadVideo({ path: v.path })}
-                          >
-                            Load
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          className="roto-assets__btn roto-assets__remove"
-                          title="Remove from project"
-                          onClick={() => void removeVideo(v.path)}
-                        >
-                          x
-                        </button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )
             ) : null}
 
             {filteredImages.length > 0 ? (
@@ -362,13 +523,23 @@ export default function RotoAssetsPanel() {
       </div>
 
       <div className="roto-assets__toolbar">
-        <div className="roto-assets__toolbar-side">
+        <div className="roto-assets__toolbar-side roto-assets__toolbar-side--main">
+          <button
+            type="button"
+            className="roto-assets__tool-btn"
+            title="Sort by name"
+            onClick={() =>
+              setSort((s) => (s === "name-asc" ? "name-desc" : "name-asc"))
+            }
+          >
+            {sort === "name-asc" ? "Sort A-Z" : "Sort Z-A"}
+          </button>
           <div className="roto-assets__search">
             <input
               className="roto-assets__search-input"
               type="text"
               value={search}
-              placeholder="filter by path"
+              placeholder="filter by name"
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Escape") setSearch("");
@@ -385,16 +556,6 @@ export default function RotoAssetsPanel() {
               </button>
             ) : null}
           </div>
-          <button
-            type="button"
-            className="roto-assets__tool-btn"
-            title="Sort by name"
-            onClick={() =>
-              setSort((s) => (s === "name-asc" ? "name-desc" : "name-asc"))
-            }
-          >
-            {sort === "name-asc" ? "Sort A-Z" : "Sort Z-A"}
-          </button>
         </div>
         <div className="roto-assets__toolbar-side">
           <button
@@ -421,6 +582,40 @@ export default function RotoAssetsPanel() {
           </button>
         </div>
       </div>
+
+      {menu
+        ? (() => {
+            const loaded = video?.path === menu.path;
+            return (
+              <RotoContextMenu
+                x={menu.x}
+                y={menu.y}
+                onClose={() => setMenu(null)}
+                items={[
+                  loaded
+                    ? {
+                        type: "action",
+                        label: "Clear",
+                        onClick: clearLoadedVideo,
+                      }
+                    : {
+                        type: "action",
+                        label: "Load",
+                        onClick: () => loadVideoPath(menu.path),
+                      },
+                  { type: "separator" },
+                  {
+                    type: "action",
+                    label: "Remove",
+                    danger: true,
+                    icon: <TrashIcon />,
+                    onClick: () => void removeVideo(menu.path),
+                  },
+                ]}
+              />
+            );
+          })()
+        : null}
     </div>
   );
 }
@@ -521,6 +716,70 @@ const STYLES = `
   height: 100%;
   object-fit: cover;
 }
+/* Video cards in grid view (item 5): a square dark tile with the VIDEO badge
+   centered; the filename sits below. Trash (top-right) and a Load/Clear bar
+   (bottom) fade in on hover. */
+.roto-assets__vcard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  cursor: pointer;
+}
+.roto-assets__vthumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.roto-assets__vcard--loaded .roto-assets__vthumb {
+  border-color: var(--text-faint);
+}
+.roto-assets__vcard--selected .roto-assets__vthumb {
+  box-shadow: inset 0 0 0 2px var(--accent, #6ea8fe);
+}
+.roto-assets__vthumb-trash {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  color: #fca5a5;
+  background: rgba(0, 0, 0, 0.5);
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.roto-assets__vthumb-trash:hover {
+  color: #fff;
+  background: #b91c1c;
+}
+.roto-assets__vthumb:hover .roto-assets__vthumb-trash {
+  display: inline-flex;
+}
+.roto-assets__vthumb-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
+}
+.roto-assets__vthumb:hover .roto-assets__vthumb-overlay {
+  display: flex;
+}
 .roto-assets__imglist {
   list-style: none;
   margin: 0;
@@ -569,6 +828,15 @@ const STYLES = `
 }
 .roto-assets__video-row--loaded {
   background: var(--surface);
+}
+.roto-assets__video-row {
+  cursor: pointer;
+}
+/* Visual single-click selection (item 2): subtle fill + a left accent rail.
+   Inset box-shadow rather than a real border so the row doesn't reflow. */
+.roto-assets__video-row--selected {
+  background: var(--surface);
+  box-shadow: inset 2px 0 0 var(--accent, #6ea8fe);
 }
 .roto-assets__video-info {
   display: flex;
@@ -659,10 +927,17 @@ const STYLES = `
   gap: 6px;
   min-width: 0;
 }
+/* The left group holds Sort + the search input and grows to fill the gap before
+   the List/Grid buttons on the right (item 4). */
+.roto-assets__toolbar-side--main {
+  flex: 1 1 auto;
+}
 .roto-assets__search {
   position: relative;
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
+  min-width: 80px;
 }
 .roto-assets__search-input {
   font: inherit;
@@ -672,7 +947,7 @@ const STYLES = `
   border: 1px solid var(--border-soft);
   border-radius: 3px;
   padding: 2px 18px 2px 6px;
-  width: 110px;
+  width: 100%;
   outline: none;
 }
 .roto-assets__search-input:focus {
