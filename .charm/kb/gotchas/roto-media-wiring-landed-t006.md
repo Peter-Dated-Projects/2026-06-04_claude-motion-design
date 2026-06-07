@@ -3,7 +3,7 @@ id: roto-media-wiring-landed-t006
 root: gotchas
 type: gotcha
 status: current
-summary: "T-006 wired roto media: source videos enter via a file picker (no backend list; reuses rotoStore.loadVideo, NOT a new loadedVideoPath setter); list_rotoscope_outputs enumerates assets/rotoscope_*/ PNGs; output stop-motion playback fps is computed as 30/(frameSkip+1) because meta.json records frame_skip but NOT the source fps."
+summary: "T-006 wired roto media: source videos enter via a file picker (no backend list; reuses rotoStore.loadVideo, NOT a new loadedVideoPath setter); list_rotoscope_outputs enumerates assets/rotoscope_*/ PNGs; output stop-motion playback fps was 30/(frameSkip+1) because meta.json lacked source fps -- AS OF T-009 meta.json now records source_fps (threaded over the SSE snapshot), so the 30fps fallback only applies to old/missing meta."
 created: 2026-06-06
 updated: 2026-06-06
 related:
@@ -24,14 +24,21 @@ needs:
    was intentionally not added. RotoVideoPanel already reads `video` +
    `convertFileSrc(video.path)`.
 
-2. **Effective playback fps assumes a 30fps source.** `meta.json`
-   (rotoscoping.rs::RotoMeta) records `frame_skip` but NOT the source video's fps.
-   So stop-motion playback fps is derived as `30 / (frameSkip + 1)` (ASSUMED_FPS
-   in RotoOutputsPanel, matching RotoVideoPanel's ASSUMED_FPS and the proposal's
-   30fps estimate table). If a source was not 30fps the playback speed is
-   approximate -- fixing it properly means recording source fps in meta.json on
-   the microservice side. `frameSkip` is null when meta.json is absent/malformed;
-   the panel falls back to the proposal default skip=3 (7.5fps).
+2. **Effective playback fps now uses the real source fps (T-009).** Originally
+   `meta.json` recorded `frame_skip` but NOT the source fps, so playback was
+   derived as `30 / (frameSkip + 1)` (ASSUMED_FPS). T-009 completed the writer:
+   the microservice probes source fps in `POST /rotoscope` and stamps it on the
+   `Job` so it rides EVERY SSE snapshot (`source_fps` key, set once at POST time,
+   before the job launches). The Rust client captures the last-seen value in
+   `run_progress_stream` (now returns a `StreamOutcome { stage, source_fps }`,
+   not a bare stage String) and writes it into `meta.json` via
+   `RotoMeta.source_fps`. The read-side (`roto_media.rs` `RotoMetaRead.source_fps`,
+   `RotoOutputsPanel.effectiveFps`) then plays back at the real rate. The
+   `30 / (frameSkip + 1)` fallback now applies ONLY to old outputs or
+   absent/malformed meta. NON-OBVIOUS: source_fps travels over the SSE progress
+   stream, NOT in the result ZIP or a separate fetch -- don't add an endpoint for
+   it. `frameSkip` is still null when meta.json is absent/malformed; the panel
+   falls back to the proposal default skip=3 (7.5fps).
 
 3. **loadedSequence vs video are mutually exclusive in the UI.** rotoStore gained
    `loadedSequence` (ordered convertFileSrc PNG urls + fps) with
