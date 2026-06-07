@@ -90,6 +90,17 @@ fn now_rfc3339() -> String {
     rfc3339(now_secs())
 }
 
+/// A source video registered with a project. The file is referenced in place
+/// (never copied into the project), so `path` is the user's original absolute
+/// path; `added_at` is when it was registered. Persisted in `project.json`'s
+/// `videos` array so the source list survives restarts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectVideo {
+    pub path: String,
+    pub added_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
@@ -99,6 +110,10 @@ pub struct Project {
     pub created_at: String,
     pub updated_at: String,
     pub session_id: Option<String>,
+    /// Registered source videos. `#[serde(default)]` so project.json files that
+    /// predate this field still deserialize (older projects get an empty list).
+    #[serde(default)]
+    pub videos: Vec<ProjectVideo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -327,6 +342,7 @@ pub fn create_project(app: AppHandle, name: String) -> Result<Project, String> {
         created_at: now.clone(),
         updated_at: now,
         session_id: None,
+        videos: Vec::new(),
     };
 
     write_project_meta(&dir, &project)?;
@@ -687,6 +703,66 @@ pub fn add_asset(
         data_uri: data_uri(&ext, &bytes),
         name: final_name,
     })
+}
+
+// --- project source-video registry ------------------------------------------
+// Source videos are referenced in place (never copied) and tracked in the
+// project's `videos` array so the source list survives restarts. Adding a video
+// is idempotent on `path`; removing matches by exact `path`.
+
+/// List a project's registered source videos (from project.json's `videos`).
+#[tauri::command]
+pub fn list_project_videos(app: AppHandle, slug: String) -> Result<Vec<ProjectVideo>, String> {
+    let dir = project_dir(&app, &slug)?;
+    if !dir.is_dir() {
+        return Err(format!("project '{slug}' not found"));
+    }
+    Ok(read_project_meta(&dir)?.videos)
+}
+
+/// Register a source video with a project and return it. Idempotent: if `path`
+/// is already in the list the existing entry is returned unchanged (no duplicate
+/// append). Persists the updated `videos` array to project.json.
+#[tauri::command]
+pub fn add_project_video(
+    app: AppHandle,
+    slug: String,
+    path: String,
+) -> Result<ProjectVideo, String> {
+    let dir = project_dir(&app, &slug)?;
+    if !dir.is_dir() {
+        return Err(format!("project '{slug}' not found"));
+    }
+    let mut project = read_project_meta(&dir)?;
+    if let Some(existing) = project.videos.iter().find(|v| v.path == path) {
+        return Ok(existing.clone());
+    }
+    let video = ProjectVideo {
+        path,
+        added_at: now_rfc3339(),
+    };
+    project.videos.push(video.clone());
+    project.updated_at = now_rfc3339();
+    write_project_meta(&dir, &project)?;
+    Ok(video)
+}
+
+/// Remove a registered source video by exact `path`. No-op (still Ok) if the
+/// path is not in the list. Persists the updated `videos` array to project.json.
+#[tauri::command]
+pub fn remove_project_video(app: AppHandle, slug: String, path: String) -> Result<(), String> {
+    let dir = project_dir(&app, &slug)?;
+    if !dir.is_dir() {
+        return Err(format!("project '{slug}' not found"));
+    }
+    let mut project = read_project_meta(&dir)?;
+    let before = project.videos.len();
+    project.videos.retain(|v| v.path != path);
+    if project.videos.len() != before {
+        project.updated_at = now_rfc3339();
+        write_project_meta(&dir, &project)?;
+    }
+    Ok(())
 }
 
 /// Bump updated_at on project.json after a mutating write.

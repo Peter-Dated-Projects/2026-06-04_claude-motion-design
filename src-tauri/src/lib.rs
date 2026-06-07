@@ -54,6 +54,9 @@ pub fn run() {
             commands::projects::write_file,
             commands::projects::list_assets,
             commands::projects::add_asset,
+            commands::projects::list_project_videos,
+            commands::projects::add_project_video,
+            commands::projects::remove_project_video,
             commands::projects::save_conversation,
             commands::projects::load_conversation,
             commands::projects::reveal_project,
@@ -85,6 +88,7 @@ pub fn run() {
             commands::roto_media::choose_roto_export_path,
             commands::roto_media::export_roto_output,
             commands::roto_media::rename_rotoscope_output,
+            commands::roto_media::delete_rotoscope_output,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
