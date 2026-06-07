@@ -38,6 +38,10 @@ class Job:
     frames_done: int = 0
     frames_total: int = 0
     error: Optional[str] = None
+    # Probed source-video frame rate (frames/sec), set once at POST time before
+    # the job launches. Surfaced in every SSE snapshot so the Rust client can
+    # record it in meta.json (the read-side falls back to 30fps when absent).
+    source_fps: Optional[float] = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
     work_dir: Optional[Path] = None
     zip_path: Optional[Path] = None
@@ -51,6 +55,7 @@ class Job:
         frames_done: Optional[int] = None,
         frames_total: Optional[int] = None,
         error: Optional[str] = None,
+        source_fps: Optional[float] = None,
     ) -> None:
         with self._lock:
             if stage is not None:
@@ -63,6 +68,8 @@ class Job:
                 self.frames_total = frames_total
             if error is not None:
                 self.error = error
+            if source_fps is not None:
+                self.source_fps = source_fps
 
     def snapshot(self) -> dict:
         """Thread-safe copy of the progress fields for an SSE event."""
@@ -75,6 +82,8 @@ class Job:
             }
             if self.error is not None:
                 snap["error"] = self.error
+            if self.source_fps is not None:
+                snap["source_fps"] = self.source_fps
             return snap
 
     @property

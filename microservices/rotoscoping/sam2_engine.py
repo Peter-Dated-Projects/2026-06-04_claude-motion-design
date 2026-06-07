@@ -5,7 +5,7 @@ it as loaded and every job reuses the in-VRAM model. Each job:
 
   1. init_state on the extracted frame directory
   2. add_new_points_or_box(frame_idx=0, ...) for the multi-point prompt
-  3. propagate_in_video under inference_mode + autocast(bfloat16)
+  3. propagate_in_video under inference_mode + autocast(probe-selected dtype)
   4. for frames where `frame_idx % (frame_skip+1) == 0`, composite the original
      RGB frame with the predicted mask as alpha -> RGBA PNG
   5. reset_state in a finally block, ALWAYS (prevents VRAM accumulation)
@@ -75,6 +75,120 @@ def log_memory(log: logging.Logger, label: str) -> None:
 # Module-level predictor, populated by load_predictor() at startup.
 _predictor = None
 
+# One-time GPU configuration profile, populated by load_predictor() via
+# _probe_gpu(). Holds the autocast dtype, TF32 setting, and JSON-safe labels for
+# /health. None until the probe has run.
+_GPU_PROFILE: Optional[dict] = None
+
+
+def _probe_gpu() -> dict:
+    """Probe the CUDA GPU and return a configuration profile.
+
+    Raises RuntimeError if no CUDA device is available (Mac/CPU-only), which the
+    startup sequence in main.py catches to log + exit cleanly. Selects the
+    autocast dtype and TF32 setting by GPU generation. Developed on a Mac without
+    CUDA, so the per-generation paths here could not be executed; VERIFY on the
+    target box.
+    """
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "No CUDA device found. This service requires a CUDA-capable GPU. "
+            "Mac and CPU-only runs are not supported."
+        )
+    props = torch.cuda.get_device_properties(0)
+    major, minor = props.major, props.minor
+    name = props.name
+    vram_gb = props.total_memory / (1024**3)
+
+    # Compute capability -> generation mapping (NVIDIA convention):
+    #   sm_60-61: Pascal (10-series)
+    #   sm_70-72: Volta (Titan V, V100)
+    #   sm_75: Turing (16-series, 20-series)
+    #   sm_80-86: Ampere (30-series, A-series)
+    #   sm_89: Ada (40-series)
+    #   sm_90: Hopper (H100, H200)
+    #   sm_100+: Blackwell (50-series, GB200)
+    if major >= 10:
+        generation = "blackwell"  # RTX 5000-series / GB200
+    elif major == 9:
+        generation = "hopper"  # H100, H200 -- bfloat16 + FlashAttn
+    elif major == 8 and minor == 9:
+        generation = "ada"  # RTX 4000-series
+    elif major == 8:
+        generation = "ampere"  # RTX 3000-series
+    elif major == 7 and minor == 5:
+        generation = "turing"
+    else:
+        generation = "legacy"
+
+    # Dtype selection: bfloat16 is preferred on Ampere+ (hardware-accelerated);
+    # Turing supports fp16 but not bfloat16 in hardware; legacy falls back to fp32.
+    if generation in ("blackwell", "hopper", "ada", "ampere"):
+        dtype = torch.bfloat16
+    elif generation == "turing":
+        dtype = torch.float16
+    else:
+        dtype = torch.float32
+
+    # TF32: enabled by default on Ampere+, but explicitly set here so the log is
+    # authoritative. Turing and below do not support TF32.
+    use_tf32 = generation in ("blackwell", "hopper", "ada", "ampere")
+    torch.backends.cuda.matmul.allow_tf32 = use_tf32
+    torch.backends.cudnn.allow_tf32 = use_tf32
+
+    # dtype_str is a JSON-safe label used in /health and logging; torch.dtype
+    # objects are not JSON-serializable so never put `dtype` directly in a
+    # response dict that gets json.dumps'd.
+    dtype_str = str(dtype).replace("torch.", "")  # e.g. "bfloat16"
+
+    logger.info(
+        "GPU probe: %s (sm_%d%d, %s, %.1f GB VRAM) | dtype=%s tf32=%s",
+        name,
+        major,
+        minor,
+        generation,
+        vram_gb,
+        dtype_str,
+        use_tf32,
+    )
+    return {
+        "name": name,
+        "generation": generation,
+        "compute_capability": [major, minor],  # list, not tuple, for JSON safety
+        "vram_gb": round(vram_gb, 1),
+        "dtype": dtype,  # torch.dtype -- for internal use (autocast)
+        "dtype_str": dtype_str,  # str -- for /health JSON response
+    }
+
+
+def _gpu_dtype() -> "torch.dtype":
+    """Autocast dtype chosen by the GPU probe; bfloat16 until the probe has run.
+
+    run_job calls load_predictor() (which runs the probe) before opening the
+    autocast block, so in practice the profile is always populated by then; the
+    bfloat16 default is just a defensive fallback.
+    """
+    if _GPU_PROFILE is not None:
+        return _GPU_PROFILE["dtype"]
+    return torch.bfloat16
+
+
+def gpu_profile() -> Optional[dict]:
+    """JSON-safe GPU profile for the /health response, or None if not yet probed.
+
+    Excludes the raw `dtype` torch.dtype object (not JSON-serializable); callers
+    json.dumps this directly.
+    """
+    if _GPU_PROFILE is None:
+        return None
+    return {
+        "name": _GPU_PROFILE["name"],
+        "generation": _GPU_PROFILE["generation"],
+        "compute_capability": _GPU_PROFILE["compute_capability"],
+        "vram_gb": _GPU_PROFILE["vram_gb"],
+        "dtype_str": _GPU_PROFILE["dtype_str"],
+    }
+
 
 class RotoscopeOOMError(RuntimeError):
     """CUDA ran out of memory during propagation."""
@@ -91,22 +205,68 @@ def load_predictor():
     torch build (e.g. the Mac dev box) -- import main works; only startup, which
     calls this, requires CUDA.
     """
-    global _predictor
+    global _predictor, _GPU_PROFILE
     if _predictor is not None:
         return _predictor
 
     from sam2.build_sam import build_sam2_video_predictor
 
+    # One-time GPU probe before the build: picks the autocast dtype + TF32 and
+    # gates FlashAttention. Raises RuntimeError on a non-CUDA box; startup
+    # catches it to exit cleanly.
+    _GPU_PROFILE = _probe_gpu()
+
+    # FlashAttention-2 / SDPA is available on Ada (sm_89), Hopper (sm_90) and
+    # Blackwell (sm_100+); Ampere and below default to standard attention.
+    # VERIFY: that build_sam2_video_predictor accepts use_flash_attn on the
+    # installed sam2 build (added with the GPU probe, never run on this Mac).
+    use_flash = _GPU_PROFILE["generation"] in ("ada", "hopper", "blackwell")
     logger.info(
-        "Building SAM2 predictor (config=%s checkpoint=%s)",
+        "Building SAM2 predictor (config=%s checkpoint=%s use_flash_attn=%s)",
         config.SAM2_CONFIG_NAME,
         config.CHECKPOINT_PATH,
+        use_flash,
     )
-    _predictor = build_sam2_video_predictor(
-        config.SAM2_CONFIG_NAME,
-        str(config.CHECKPOINT_PATH),
-        device="cuda",
-    )
+    try:
+        _predictor = build_sam2_video_predictor(
+            config.SAM2_CONFIG_NAME,
+            str(config.CHECKPOINT_PATH),
+            device="cuda",
+            use_flash_attn=use_flash,
+        )
+    except ImportError:
+        # flash-attn package not installed; the build tried to import it because
+        # use_flash_attn=True. Rebuild with use_flash_attn=False, which skips the
+        # import path entirely. Catch ImportError SPECIFICALLY, not bare
+        # Exception, so genuine SAM2 build errors (wrong checkpoint path, config
+        # mismatch) still surface.
+        logger.warning(
+            "flash-attn not available on this system; building without FlashAttention"
+        )
+        _predictor = build_sam2_video_predictor(
+            config.SAM2_CONFIG_NAME,
+            str(config.CHECKPOINT_PATH),
+            device="cuda",
+            use_flash_attn=False,
+        )
+    except TypeError as exc:
+        # The installed sam2 build's build_sam2_video_predictor signature doesn't
+        # accept use_flash_attn at all (the kwarg was added with the GPU probe and
+        # is unverified on this Mac). Passing use_flash_attn=False would raise the
+        # SAME TypeError, so the fallback must OMIT the kwarg entirely. Without
+        # this arm the build raises on exactly the flash-capable GPUs
+        # (Ada/Hopper/Blackwell) this targets, and main.py's lifespan handler only
+        # catches RuntimeError -> ungraceful startup crash.
+        logger.warning(
+            "build_sam2_video_predictor does not accept use_flash_attn "
+            "(signature mismatch: %s); building without it",
+            exc,
+        )
+        _predictor = build_sam2_video_predictor(
+            config.SAM2_CONFIG_NAME,
+            str(config.CHECKPOINT_PATH),
+            device="cuda",
+        )
     logger.info("SAM2 predictor loaded")
     return _predictor
 
@@ -211,7 +371,7 @@ def run_job(
     current_chunk_dir: Optional[Path] = None
 
     try:
-        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        with torch.inference_mode(), torch.autocast("cuda", dtype=_gpu_dtype()):
             job.update(stage="segmenting", progress=0.1)
 
             for chunk_idx in range(num_chunks):

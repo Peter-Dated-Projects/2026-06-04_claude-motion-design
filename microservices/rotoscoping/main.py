@@ -86,8 +86,19 @@ def _ensure_weights() -> None:
 async def lifespan(app: FastAPI):
     _require_cuda()
     _ensure_weights()
-    # Load the predictor once so /health reports it and jobs reuse it.
-    sam2_engine.load_predictor()
+    # Load the predictor once so /health reports it and jobs reuse it. The GPU
+    # probe inside raises RuntimeError on a non-CUDA box (Mac/CPU); treat that as
+    # fatal -- log CRITICAL and exit rather than serving a permanently-broken
+    # process. (_require_cuda above is the earlier safety net; this guards the
+    # probe path specifically.)
+    try:
+        sam2_engine.load_predictor()
+    except RuntimeError:
+        logger.critical(
+            "FATAL: This rotoscoping service requires a CUDA GPU. Mac (MPS) and "
+            "CPU-only environments are not supported. Exiting."
+        )
+        raise SystemExit(1)
     logger.info("Rotoscoping service ready on %s:%s", config.HOST, config.PORT)
     yield
     logger.info("Rotoscoping service shutting down")
@@ -107,12 +118,18 @@ _BACKGROUND_TASKS: set[asyncio.Task] = set()
 @app.get("/health")
 async def health() -> dict:
     used_gb, total_gb = sam2_engine.vram_stats()
-    return {
+    body = {
         "status": "ok" if sam2_engine.is_loaded() else "loading",
         "model": config.MODEL_LABEL,
         "vram_used_gb": used_gb,
         "vram_total_gb": total_gb,
     }
+    # JSON-safe GPU probe (name/generation/compute_capability/vram_gb/dtype_str);
+    # absent until the predictor has loaded. Never the raw torch.dtype.
+    profile = sam2_engine.gpu_profile()
+    if profile is not None:
+        body["gpu_profile"] = profile
+    return body
 
 
 def _zip_output(output_dir: Path, zip_path: Path) -> None:
@@ -305,6 +322,11 @@ async def rotoscope(
         registry.remove(job_id)
         shutil.rmtree(work_dir, ignore_errors=True)
         raise HTTPException(status_code=400, detail=f"could not read upload: {exc}")
+
+    # Record the probed source fps on the job so it rides every SSE snapshot --
+    # the Rust client reads it from the progress stream and writes it into
+    # meta.json (the outputs panel then plays back at the real rate, not 30fps).
+    job.update(source_fps=source_fps)
 
     if duration > config.MAX_VIDEO_SECONDS:
         job.update(stage="error", error="video too long")
