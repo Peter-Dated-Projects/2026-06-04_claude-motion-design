@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { useRotoStore, MAX_CLIP_SECONDS } from "../../store/rotoStore";
 import { useProjectStore } from "../../store/projectStore";
-import type { RotoscopeResult } from "../../types/roto";
+import { useRotoJobQueueApi } from "../../hooks/useRotoJobQueue";
+import type { RotoscopeParams } from "../../types/roto";
 import type { LoadedSequence } from "../../store/rotoStore";
 import PointOverlay from "./PointOverlay";
 import RotoControls from "./RotoControls";
@@ -22,15 +23,14 @@ import ComparisonPlayer from "./ComparisonPlayer";
  *   - ReviewModal on Generate (read-only summary), then the rotoscope_video job
  *   - ProcessingView while the job runs, with Cancel
  *
- * Boundary note: the rotoStore is intentionally Tauri-free, and App.tsx wires the
- * `roto://progress` listener app-level but defers the job-START commands
- * (`rotoscope_video` / `cancel_rotoscope`) to this panel. So this is the one place
- * those two invokes live; the store reducers stay pure and we feed results back
- * through the documented actions (startJob / jobComplete / setError).
+ * Boundary note: the rotoStore is intentionally Tauri-free. The job-START
+ * commands (`trim_video` / `rotoscope_video` / `cancel_rotoscope`) now live in the
+ * `useRotoJobQueue` hook -- Generate enqueues a job and the hook runs it, so the
+ * user can stack a second job (load another video, place points, Generate again)
+ * while the first runs. This panel still shows the single-job ProcessingView /
+ * done / error banners for the active job via the rotoStore, which the hook keeps
+ * in sync through the documented actions (startJob / jobComplete / setError).
  */
-
-/** Mirrors App.tsx's ROTO_HOST_KEY -- the LAN host of the optional microservice. */
-const ROTO_HOST_KEY = "claude-motion:rotoHost";
 
 /** Source fps assumed for frame<->time conversion when the video is unprobed. */
 const ASSUMED_FPS = 30;
@@ -375,11 +375,9 @@ export default function RotoVideoPanel() {
   const setStartFrame = useRotoStore((s) => s.setStartFrame);
   const setClipStart = useRotoStore((s) => s.setClipStart);
   const setClipEnd = useRotoStore((s) => s.setClipEnd);
-  const startJob = useRotoStore((s) => s.startJob);
-  const jobComplete = useRotoStore((s) => s.jobComplete);
-  const setError = useRotoStore((s) => s.setError);
 
   const slug = useProjectStore((s) => s.activeProject?.slug ?? null);
+  const queue = useRotoJobQueueApi();
 
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -479,70 +477,48 @@ export default function RotoVideoPanel() {
 
   // --- Job lifecycle ---------------------------------------------------------
 
-  const runJob = async (compress: boolean, quality: number) => {
+  const runJob = (compress: boolean, quality: number) => {
     setShowModal(false);
     if (!video || startFrame == null || !slug) return;
-    const host = localStorage.getItem(ROTO_HOST_KEY) || "localhost";
-    // One client-supplied job id, threaded all the way through: the bar shows
-    // activity immediately, the backend registers the job under it, and cancel
-    // (DELETE /rotoscope/{jobId}) targets this exact id so it reaches the real job.
-    const jobId = `roto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    startJob(jobId);
-    try {
-      // When a clip range is set, trim the source to [clipStart, clipEnd] first
-      // and upload that. The downstream rotoscope_video re-clips frame-accurately
-      // from `startFrame` with gte(n, start_frame) on whatever file it receives,
-      // so the reference frame index must be rebased onto the trimmed clip (the
-      // trim drops the first clipStart seconds). Points are spatial coords on the
-      // reference frame and are unaffected.
-      let sourcePath = video.path;
-      let effectiveStartFrame = startFrame;
-      if (hasClip) {
-        sourcePath = await invoke<string>("trim_video", {
-          path: video.path,
-          startSecs: clipStart,
-          endSecs: clipEnd,
-        });
-        effectiveStartFrame = Math.max(
-          0,
-          startFrame - Math.round((clipStart as number) * fps),
-        );
-      }
-      const result = await invoke<RotoscopeResult>("rotoscope_video", {
-        slug,
-        host,
-        sourcePath,
-        jobId,
-        startFrame: effectiveStartFrame,
-        points,
-        frameSkip,
-        compress,
-        quality,
-      });
-      jobComplete(result);
-    } catch (err) {
-      setError(typeof err === "string" ? err : `Rotoscope failed: ${String(err)}`);
-    }
+    // Hand the job to the queue. Clip bounds are carried RAW -- the trim runs
+    // inside the hook at job-start time, not here, so a queued job that is
+    // cancelled before it runs never spills a temp file. `startFrame` / `fps`
+    // ride along so the hook can rebase the reference frame onto the trim.
+    const params: RotoscopeParams = {
+      slug,
+      sourcePath: video.path,
+      startFrame,
+      clipStart: hasClip ? clipStart : null,
+      clipEnd: hasClip ? clipEnd : null,
+      points,
+      frameSkip,
+      compress,
+      quality,
+      fps,
+    };
+    const basename = video.path.split(/[/\\]/).pop() || video.path;
+    queue.enqueue(params, `${basename} (frame ${startFrame})`);
   };
 
-  const cancelJob = async () => {
-    const host = localStorage.getItem(ROTO_HOST_KEY) || "localhost";
+  const cancelJob = () => {
+    // Delegate the backend teardown to the queue (it owns the cancel_rotoscope
+    // invoke and the card state), then return this pane to point placement. The
+    // store exposes no cancel reducer (its `reset` wipes the whole setup), so
+    // flip just the job fields back to idle directly.
     const jobId = useRotoStore.getState().jobId;
-    try {
-      if (jobId) await invoke("cancel_rotoscope", { host, jobId });
-    } catch {
-      // The job may already be gone; cancel is best-effort. Either way we return
-      // the user to point placement below.
+    // queue.cancel may promote the next queued job to running (and call
+    // startJob() for it) before returning. Only reset the store back to idle
+    // when the queue is now idle -- otherwise we'd clobber the just-promoted
+    // job's freshly-written store state.
+    const promotedNext = jobId ? queue.cancel(jobId) : false;
+    if (!promotedNext) {
+      useRotoStore.setState({
+        phase: "idle",
+        jobId: null,
+        progress: null,
+        error: null,
+      });
     }
-    // Return to the point-placement view, preserving the loaded video / start
-    // frame / points. The store exposes no cancel reducer (its `reset` wipes the
-    // whole setup), so flip just the job fields back to idle directly.
-    useRotoStore.setState({
-      phase: "idle",
-      jobId: null,
-      progress: null,
-      error: null,
-    });
   };
 
   // --- Render ----------------------------------------------------------------
@@ -691,7 +667,7 @@ export default function RotoVideoPanel() {
 
       {showModal ? (
         <ReviewModal
-          onConfirm={(compress, quality) => void runJob(compress, quality)}
+          onConfirm={(compress, quality) => runJob(compress, quality)}
           onCancel={() => setShowModal(false)}
         />
       ) : null}

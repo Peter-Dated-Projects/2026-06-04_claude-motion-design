@@ -123,6 +123,39 @@ export interface LoadedVideo {
 }
 
 /**
+ * Everything `useRotoJobQueue._processNext` needs to launch one rotoscope run via
+ * `invoke("rotoscope_video", ...)`. Captured at enqueue time from the current
+ * store state so a queued job is self-contained and does not depend on the live
+ * store still describing it when the job finally runs.
+ *
+ * Clip bounds are kept RAW (source-relative seconds, or null for the whole
+ * video), not pre-trimmed: the trim (`invoke("trim_video", ...)`) is performed
+ * inside `_processNext` at run time. Eager trimming at enqueue time would block
+ * the UI and spill temp files for jobs the user may cancel before they ever run.
+ * `startFrame` is likewise source-relative and rebased onto the trimmed clip at
+ * run time; `fps` is carried so that rebase (`startFrame - clipStart*fps`) can be
+ * computed without re-reading the source video. `host` is intentionally absent --
+ * it is read from localStorage inside `_processNext`, not captured here.
+ */
+export interface RotoscopeParams {
+  slug: string;
+  /** Original source file path (pre-trim). */
+  sourcePath: string;
+  /** Reference frame index, source-relative (rebased onto the trim at run time). */
+  startFrame: number;
+  /** Clip start in source-relative seconds, or null for the whole video. */
+  clipStart: number | null;
+  clipEnd: number | null;
+  points: RotoPoint[];
+  frameSkip: number;
+  /** Legacy submit pair (see ReviewModal.qualityToSubmitParams). */
+  compress: boolean;
+  quality: number;
+  /** Source fps, used to rebase `startFrame` after a trim. */
+  fps: number;
+}
+
+/**
  * A completed rotoscope job in the outputs list, one per `rotoscope_<name>/`
  * folder under the project's assets. Named after the source file's stem.
  */
