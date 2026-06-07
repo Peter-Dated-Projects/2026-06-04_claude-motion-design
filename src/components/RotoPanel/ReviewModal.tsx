@@ -82,15 +82,25 @@ export default function ReviewModal({ onConfirm, onCancel }: ReviewModalProps) {
 
   const sourceFps = video?.fps ?? null;
   const duration = video?.durationSeconds ?? null;
+  // Probe sets fps + duration together; until both land the video is "unprobed".
+  const probed = sourceFps != null && duration != null;
+
+  // Scope the estimate's duration input to the clip when a region is set (both
+  // bounds present -- `clip` is already null when only one is, matching the
+  // trim gating). Otherwise use the full source duration.
+  const estimateDuration =
+    clip != null ? Math.max(0, clip.end - clip.start) : duration;
 
   // Cadence: we process every (frameSkip + 1)th frame.
   const step = frameSkip + 1;
   // Derived output fps (canonical value is the integer frameSkip).
   const targetFps = sourceFps != null && sourceFps > 0 ? sourceFps / step : null;
-  // Output-frame estimate, computed in TS from the cached ffprobe metadata.
+  // Output-frame estimate, computed in TS from the cached ffprobe metadata over
+  // the (clip-scoped) duration. Non-null exactly once probed; clamped to >= 1 so
+  // a zero-length / inverted range never shows a 0 or negative frame count.
   const estimate =
-    duration != null && duration > 0 && sourceFps != null
-      ? Math.ceil((duration * sourceFps) / step)
+    probed && sourceFps != null && estimateDuration != null
+      ? Math.max(1, Math.ceil((estimateDuration * sourceFps) / step))
       : null;
 
   const fgCount = points.filter((p) => p.label === 1).length;
@@ -168,7 +178,7 @@ export default function ReviewModal({ onConfirm, onCancel }: ReviewModalProps) {
               {estimate != null ? (
                 `${estimate}`
               ) : (
-                <span className="roto-modal__hint">unavailable (unprobed)</span>
+                <span className="roto-modal__hint">probing video...</span>
               )}
             </dd>
           </div>
