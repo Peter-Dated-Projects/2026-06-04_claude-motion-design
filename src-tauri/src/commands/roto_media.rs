@@ -50,6 +50,11 @@ pub struct RotoOutput {
     pub source: Option<String>,
     /// `frame_skip` from meta.json (drives effective-fps playback), or null.
     pub frame_skip: Option<u32>,
+    /// Probed source-video fps from meta.json, or null. Lets the frontend play
+    /// back at the source's real rate instead of assuming 30fps. Optional: older
+    /// outputs (and outputs whose meta.json was written before the bridge records
+    /// it) omit it, in which case the frontend falls back to the 30fps estimate.
+    pub source_fps: Option<f64>,
     /// Number of `frame_*.png` files actually present on disk.
     pub frame_count: u32,
     /// Absolute path to the first PNG (the thumbnail), or null if none.
@@ -65,6 +70,7 @@ pub struct RotoOutput {
 struct RotoMetaRead {
     source: Option<String>,
     frame_skip: Option<u32>,
+    source_fps: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -108,17 +114,17 @@ fn ordered_frames(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Read `meta.json` in `dir` for the source path + frame_skip. Missing or
-/// malformed meta is not an error -- the folder is still a valid output, just
-/// without enrichment (returns None/None).
-fn read_meta(dir: &Path) -> (Option<String>, Option<u32>) {
+/// Read `meta.json` in `dir` for the source path + frame_skip + source fps.
+/// Missing or malformed meta is not an error -- the folder is still a valid
+/// output, just without enrichment (returns all-None).
+fn read_meta(dir: &Path) -> (Option<String>, Option<u32>, Option<f64>) {
     let raw = match std::fs::read_to_string(dir.join("meta.json")) {
         Ok(s) => s,
-        Err(_) => return (None, None),
+        Err(_) => return (None, None, None),
     };
     match serde_json::from_str::<RotoMetaRead>(&raw) {
-        Ok(meta) => (meta.source, meta.frame_skip),
-        Err(_) => (None, None),
+        Ok(meta) => (meta.source, meta.frame_skip, meta.source_fps),
+        Err(_) => (None, None, None),
     }
 }
 
@@ -155,12 +161,13 @@ pub fn list_rotoscope_outputs(app: AppHandle, slug: String) -> Result<Vec<RotoOu
         }
 
         let frames = ordered_frames(&dir);
-        let (source, frame_skip) = read_meta(&dir);
+        let (source, frame_skip, source_fps) = read_meta(&dir);
         outputs.push(RotoOutput {
             name,
             dir: dir.to_string_lossy().to_string(),
             source,
             frame_skip,
+            source_fps,
             frame_count: frames.len() as u32,
             thumbnail: frames.first().cloned(),
             frames,
@@ -399,7 +406,7 @@ pub fn export_roto_output(
     let _ = app.emit("export://progress", serde_json::json!({ "progress": 0.0 }));
 
     // Determine the effective fps from meta.json for GIF palettegen.
-    let (_, frame_skip) = read_meta(d);
+    let (_, frame_skip, _) = read_meta(d);
     let skip = frame_skip.unwrap_or(3);
     let fps = 30u32 / (skip + 1);
 
