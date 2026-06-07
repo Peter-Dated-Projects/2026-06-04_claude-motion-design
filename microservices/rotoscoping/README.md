@@ -55,7 +55,7 @@ The service binds `0.0.0.0:7080` so a LAN client (the app on another machine)
 can reach it. Set `ROTO_HOST` / `ROTO_PORT` to override.
 
 **First run** downloads:
-- SAM2 Large weights (~900MB) into `models/`.
+- SAM2 weights into `models/` — the default `base_plus` checkpoint (~320MB); `large` (~900MB) if you override the model.
 - A static ffmpeg build into `bin/` *only if* `ffmpeg`/`ffprobe` are not already
   on PATH (Windows only).
 
@@ -106,9 +106,13 @@ by an environment variable.
 The SAM2 model checkpoint name, Hydra config name, and download URL **must agree
 with the installed `sam-2` package version**. They live together in `config.py`:
 
-- `SAM2_CHECKPOINT_NAME` (default `sam2_hiera_large.pt`)
-- `SAM2_CONFIG_NAME` (default `sam2_hiera_large.yaml`)
-- `SAM2_CHECKPOINT_URL` (default the 072824 release)
+- `SAM2_CHECKPOINT_NAME` (default `sam2_hiera_base_plus.pt`)
+- `SAM2_CONFIG_NAME` (default `configs/sam2/sam2_hiera_b+.yaml`)
+- `SAM2_CHECKPOINT_URL` (default the 072824 base_plus release)
+
+The default is `base_plus` (smaller/faster, lower VRAM, at some cost to fine-edge
+mask quality). To use `large`, set all three via `ROTO_SAM2_*` together:
+`sam2_hiera_large.pt`, `configs/sam2/sam2_hiera_l.yaml`, and the `…/072824/sam2_hiera_large.pt` URL.
 
 If you bump `sam-2` in `pyproject.toml` to a 2.1 build, switch all three
 together -- e.g. `sam2.1_hiera_large.pt`, `configs/sam2.1/sam2.1_hiera_l.yaml`,
