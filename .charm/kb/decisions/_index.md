@@ -5,6 +5,8 @@ e.g. `0001-single-git-tree.md`.
 
 | Note | Summary | Status |
 |---|---|---|
+| [0009-roto-overlay-preview-coexistence.md](0009-roto-overlay-preview-coexistence.md) | In RotoVideoPanel, the point-placement overlay and clip preview coexist via showOverlay = !playing && atReferenceFrame: rest-on-frame-0 shows PointOverlay, playing/scrubbing off frame 0 shows a live preview <video>, and Rewind homes the playhead to re-show the overlay -- no lock/unlock mode. | current |
+| [0008-roto-reference-frame-is-clip-frame-zero.md](0008-roto-reference-frame-is-clip-frame-zero.md) | The roto SAM2 reference frame is always frame 0 of the selected clip (clipStart, else frame 0), derived automatically at enqueue; the manual "Set Start Frame" lock step was removed and clip selection became a drag-on-track interaction. | current |
 | [0007-ig-pipeline-bun-runtime.md](0007-ig-pipeline-bun-runtime.md) | The Instagram reel->brief pipeline is built as Bun + TypeScript scripts under scripts/ig-pipeline/, CLI-runnable/testable with no UI or Tauri wiring in v1; chosen over Node and Python (which would add a second bundled runtime). | current |
 | [0001-embedded-interactive-claude-pty.md](0001-embedded-interactive-claude-pty.md) | Pivoted from headless `claude -p` NDJSON scraping to an EMBEDDED interactive claude session in a PTY; Claude edits files with its own tools and we sync via a file watcher on animation.tsx. | current |
 | [0002-project-files-in-user-documents.md](0002-project-files-in-user-documents.md) | Project files move from the hidden app_data_dir to ~/Documents/ClaudeMotion/projects/ as user-owned documents; claude-config stays in app_data_dir. | current |

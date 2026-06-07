@@ -15,27 +15,55 @@ import ComparisonPlayer from "./ComparisonPlayer";
  * The rotoscoping stage's left "Video" pane -- the full interaction surface.
  *
  * Composition (the shell, store, types, and backend commands already exist from
- * T-001..T-003; this is the interactive flesh, T-004):
- *   - empty state until a video is loaded (via the assets pane, T-005)
- *   - a scrubbing <video> player + "Set Start Frame" to lock the reference frame
- *   - PointOverlay for placing fg/bg SAM2 prompt points on the locked frame
+ * T-001..T-003):
+ *   - empty state until a video is loaded (via the assets pane)
+ *   - PointOverlay anchored to the reference frame (frame 0 of the selected clip)
+ *     for placing fg/bg SAM2 prompt points -- always visible at rest, no manual
+ *     "Set Start Frame" lock step (see decision roto-reference-frame-is-clip-
+ *     frame-zero)
+ *   - a custom two-row control bar (ClipRangeControl) replacing native <video>
+ *     chrome: row 1 = seekable clip-region track with drag-to-select; row 2 =
+ *     speed selector, rewind/play/skip transport, and a time + frame readout
  *   - RotoControls for the frame-skip selector + live output-frame estimate
- *   - ReviewModal on Generate (read-only summary), then the rotoscope_video job
+ *   - ReviewModal on Generate, then the rotoscope_video job via the queue
  *   - ProcessingView while the job runs, with Cancel
  *
+ * Reference frame & preview-playback coexistence (resolves the PROJECT.md open
+ * question): the SAM2 reference frame is implicitly frame 0 of the clip
+ * (`clipStart`, or 0 when no region is set) -- it is derived at enqueue time in
+ * useRotoJobQueue, never picked manually here. The point-placement overlay is
+ * always anchored there. Transient clip preview (the row-2 transport) coexists
+ * with it WITHOUT a hard mode switch via a derived flag:
+ *
+ *     showOverlay = !playing && atReferenceFrame
+ *
+ * i.e. while the playhead rests on the reference frame and nothing is playing we
+ * show PointOverlay (points on frame 0); playing or scrubbing off frame 0 reveals
+ * the live preview <video> and hides the overlay. Rewind (|<) -- and any region
+ * re-anchor that moves clipStart -- snaps the playhead back to the reference
+ * frame, which restores the overlay with its points intact (points live in the
+ * store and are never cleared by playback). One screen, no lock/unlock.
+ *
  * Boundary note: the rotoStore is intentionally Tauri-free. The job-START
- * commands (`trim_video` / `rotoscope_video` / `cancel_rotoscope`) now live in the
- * `useRotoJobQueue` hook -- Generate enqueues a job and the hook runs it, so the
- * user can stack a second job (load another video, place points, Generate again)
- * while the first runs. This panel still shows the single-job ProcessingView /
- * done / error banners for the active job via the rotoStore, which the hook keeps
- * in sync through the documented actions (startJob / jobComplete / setError).
+ * commands live in the `useRotoJobQueue` hook -- Generate enqueues a job and the
+ * hook runs it, so the user can stack a second job while the first runs. This
+ * panel still shows the single-job ProcessingView / done / error banners for the
+ * active job via the rotoStore, which the hook keeps in sync.
  */
 
 /** Source fps assumed for frame<->time conversion when the video is unprobed. */
 const ASSUMED_FPS = 30;
 
 const COMPARE_LAYOUT_KEY = "claude-motion:rotoCompareLayout";
+
+/** Selectable preview playback speeds for the row-2 speed control. */
+const PLAYBACK_RATES = [0.5, 1, 2];
+
+/** Pointer slop (px) within which a press grabs an existing clip handle. */
+const HANDLE_HIT_PX = 12;
+
+/** Half-frame-ish epsilon (s) for "the playhead is on the reference frame". */
+const REFERENCE_EPSILON = 0.04;
 
 /**
  * Shared spacebar play/pause: a window-level `keydown` listener that fires
@@ -201,169 +229,314 @@ function formatTimecode(seconds: number): string {
   return `${String(mins).padStart(2, "0")}:${secs.toFixed(1).padStart(4, "0")}`;
 }
 
-/**
- * Parse a clip-time string. Accepts `MM:SS.f` (e.g. "01:04.5"), or a bare number
- * of seconds (e.g. "64.5"). Returns null for empty / unparseable input so the
- * caller can clear the bound.
- */
-function parseTimecode(raw: string): number | null {
-  const s = raw.trim();
-  if (!s) return null;
-  if (s.includes(":")) {
-    const parts = s.split(":");
-    if (parts.length !== 2) return null;
-    const m = Number(parts[0]);
-    const sec = Number(parts[1]);
-    if (!Number.isFinite(m) || !Number.isFinite(sec) || sec < 0) return null;
-    return m * 60 + sec;
-  }
-  const n = Number(s);
-  return Number.isFinite(n) && n >= 0 ? n : null;
+/** Compact fps label: integers bare ("30"), otherwise up to 2 decimals ("29.97"). */
+function fpsLabel(fps: number): string {
+  return Number.isInteger(fps) ? String(fps) : fps.toFixed(2).replace(/\.?0+$/, "");
+}
+
+// --- Inline transport / mode icons (no icon dependency, matches the app) -----
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden focusable="false">
+      <path d="M4 3l9 5-9 5z" fill="currentColor" />
+    </svg>
+  );
+}
+function PauseIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden focusable="false">
+      <rect x="4" y="3" width="3" height="10" fill="currentColor" />
+      <rect x="9" y="3" width="3" height="10" fill="currentColor" />
+    </svg>
+  );
+}
+function RewindIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden focusable="false">
+      <rect x="3" y="3" width="2" height="10" fill="currentColor" />
+      <path d="M13 3v10l-7-5z" fill="currentColor" />
+    </svg>
+  );
+}
+function SkipIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden focusable="false">
+      <path d="M3 3l7 5-7 5z" fill="currentColor" />
+      <rect x="11" y="3" width="2" height="10" fill="currentColor" />
+    </svg>
+  );
+}
+function SelectIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden focusable="false">
+      <path
+        d="M3 3h3M3 3v3M13 3h-3M13 3v3M3 13h3M3 13v-3M13 13h-3M13 13v-3"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        fill="none"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+function ClearIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden focusable="false">
+      <path
+        d="M4 4l8 8M12 4l-8 8"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
 }
 
 /**
- * Clip-range selector under the scrubber: a track showing the selected
- * [clipStart, clipEnd] region (and the playhead), two editable time inputs, and
- * Set Start / Set End buttons that stamp the current scrub position. Bounds are
- * source-relative seconds; the parent enforces the 60s cap and disables Generate.
+ * The custom two-row control bar (replaces native `<video controls>`). Owns only
+ * its in-gesture drag bookkeeping; the playhead, clip bounds, and transport are
+ * driven by the parent.
+ *
+ * Row 1 -- a "Select Region" toggle, the seek/region track, and a Clear icon:
+ *   - OUT of select mode: a bare press seeks (parent pauses + shows the live
+ *     frame). The region span renders dimmed when no region is set (visually
+ *     distinct from a clip set to the full length) and at full opacity once a
+ *     bound exists, with darkened flanks outside it.
+ *   - IN select mode: draggable start/end handles (hit-tested first), and a
+ *     bare-track press anchors a NEW range and drags its end out. Pointer
+ *     capture keeps the whole gesture on the track so seek + range-edit never
+ *     double-fire. Clamped so start <= end.
+ *
+ * Row 2 -- speed selector, rewind (|< to clip start) / play-pause / skip (>| to
+ * clip end), and a time + frame readout (`frame N @ {fps}fps` once probed, else
+ * the `~30fps` fallback). No volume / AirPlay / PiP / fullscreen affordances.
  */
 function ClipRangeControl({
   duration,
   currentTime,
   clipStart,
   clipEnd,
-  onSetStart,
-  onSetEnd,
+  fps,
+  fpsKnown,
+  playing,
+  playbackRate,
+  selectMode,
   onSeek,
+  onSetClipStart,
+  onSetClipEnd,
+  onToggleSelect,
+  onClear,
+  onTogglePlay,
+  onRewind,
+  onSkip,
+  onRate,
 }: {
   duration: number | null;
   currentTime: number;
   clipStart: number | null;
   clipEnd: number | null;
-  onSetStart: (s: number | null) => void;
-  onSetEnd: (s: number | null) => void;
+  fps: number;
+  fpsKnown: boolean;
+  playing: boolean;
+  playbackRate: number;
+  selectMode: boolean;
   onSeek: (t: number) => void;
+  onSetClipStart: (s: number | null) => void;
+  onSetClipEnd: (s: number | null) => void;
+  onToggleSelect: () => void;
+  onClear: () => void;
+  onTogglePlay: () => void;
+  onRewind: () => void;
+  onSkip: () => void;
+  onRate: (r: number) => void;
 }) {
-  // Local edit buffers so typing doesn't fight the store; commit on blur/Enter.
-  const [startText, setStartText] = useState("");
-  const [endText, setEndText] = useState("");
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  // Which bound the active select-mode pointer gesture is editing, or null.
+  const dragRef = useRef<"start" | "end" | null>(null);
 
-  // Reflect external bound changes (Set buttons, reset) into the inputs.
-  useEffect(() => {
-    setStartText(clipStart != null ? formatTimecode(clipStart) : "");
-  }, [clipStart]);
-  useEffect(() => {
-    setEndText(clipEnd != null ? formatTimecode(clipEnd) : "");
-  }, [clipEnd]);
-
+  const dur = duration && duration > 0 ? duration : null;
   const pct = (t: number) =>
-    duration && duration > 0 ? Math.min(100, Math.max(0, (t / duration) * 100)) : 0;
+    dur ? Math.min(100, Math.max(0, (t / dur) * 100)) : 0;
 
-  // The selected span: [clipStart, clipEnd], defaulting an unset bound to the
-  // clip edge. With neither set this is the full width (whole clip selected).
+  // A region is "set" once either bound exists; otherwise the track shows a
+  // dimmed full-width span (whole clip, unselected) -- visually distinct from a
+  // clip explicitly set to its full length.
+  const hasRegion = clipStart != null || clipEnd != null;
   const regionLeft = clipStart != null ? pct(clipStart) : 0;
   const regionRight = clipEnd != null ? pct(clipEnd) : 100;
-  // Only draw the selected span for a non-inverted range. With clipStart >
-  // clipEnd the width clamps to 0 but both flank masks would still render, an odd
-  // visual -- suppress the region entirely until the bounds form a positive span.
-  const hasValidRegion = regionRight > regionLeft;
+  const hasSpan = regionRight > regionLeft;
 
-  const seekFromPointer = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!duration || duration <= 0) return;
+  const timeFromPointer = (clientX: number): number | null => {
+    const track = trackRef.current;
+    if (!track || !dur) return null;
+    const rect = track.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    return frac * dur;
+  };
+
+  const onTrackDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const t = timeFromPointer(e.clientX);
+    if (t == null) return;
+    if (!selectMode) {
+      onSeek(t);
+      return;
+    }
+    // Select mode: capture the gesture and decide handle-drag vs new-range.
+    e.currentTarget.setPointerCapture(e.pointerId);
     const rect = e.currentTarget.getBoundingClientRect();
-    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    onSeek(frac * duration);
+    const xOf = (frac: number) => rect.left + frac * rect.width;
+    const dStart =
+      clipStart != null ? Math.abs(e.clientX - xOf(regionLeft / 100)) : Infinity;
+    const dEnd =
+      clipEnd != null ? Math.abs(e.clientX - xOf(regionRight / 100)) : Infinity;
+    if (dStart <= HANDLE_HIT_PX && dStart <= dEnd) {
+      dragRef.current = "start";
+      onSetClipStart(Math.min(t, clipEnd ?? dur ?? t));
+    } else if (dEnd <= HANDLE_HIT_PX) {
+      dragRef.current = "end";
+      onSetClipEnd(Math.max(t, clipStart ?? 0));
+    } else {
+      // Bare-track press: anchor a fresh range here and drag the end outward.
+      dragRef.current = "end";
+      onSetClipStart(t);
+      onSetClipEnd(t);
+    }
+  };
+
+  const onTrackMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!selectMode || !dragRef.current) return;
+    const t = timeFromPointer(e.clientX);
+    if (t == null) return;
+    if (dragRef.current === "start") {
+      onSetClipStart(Math.min(t, clipEnd ?? dur ?? t));
+    } else {
+      onSetClipEnd(Math.max(t, clipStart ?? 0));
+    }
+  };
+
+  const endDrag = () => {
+    dragRef.current = null;
   };
 
   return (
-    <div className="roto-clip">
-      <div className="roto-clip__head">
-        <span className="roto-clip__label">Clip range</span>
+    <div className="roto-bar">
+      <div className="roto-bar__row">
         <button
           type="button"
-          className="roto-clip__clear"
-          disabled={clipStart == null && clipEnd == null}
-          onClick={() => {
-            onSetStart(null);
-            onSetEnd(null);
-          }}
+          className={`roto-bar__select${selectMode ? " roto-bar__select--on" : ""}`}
+          onClick={onToggleSelect}
+          title={
+            selectMode
+              ? "Done -- drag on the track to (re)define the clip region"
+              : "Select a clip region by dragging on the track"
+          }
         >
-          Clear
+          <SelectIcon />
+          <span>Region</span>
+        </button>
+
+        <div
+          ref={trackRef}
+          className={`roto-bar__track${selectMode ? " roto-bar__track--select" : ""}`}
+          onPointerDown={onTrackDown}
+          onPointerMove={onTrackMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onLostPointerCapture={endDrag}
+          title={dur ? (selectMode ? "Drag to set the clip region" : "Click to seek") : undefined}
+        >
+          {hasSpan ? (
+            <div
+              className={`roto-bar__region${hasRegion ? "" : " roto-bar__region--dim"}`}
+              style={{ left: `${regionLeft}%`, width: `${regionRight - regionLeft}%` }}
+            />
+          ) : null}
+          {hasRegion && hasSpan && regionLeft > 0 ? (
+            <div className="roto-bar__mask" style={{ left: 0, width: `${regionLeft}%` }} />
+          ) : null}
+          {hasRegion && hasSpan && regionRight < 100 ? (
+            <div
+              className="roto-bar__mask"
+              style={{ left: `${regionRight}%`, width: `${100 - regionRight}%` }}
+            />
+          ) : null}
+          {selectMode && clipStart != null ? (
+            <div className="roto-bar__handle" style={{ left: `${regionLeft}%` }} />
+          ) : null}
+          {selectMode && clipEnd != null ? (
+            <div className="roto-bar__handle" style={{ left: `${regionRight}%` }} />
+          ) : null}
+          <div className="roto-bar__playhead" style={{ left: `${pct(currentTime)}%` }} />
+        </div>
+
+        <button
+          type="button"
+          className="roto-bar__clear"
+          onClick={onClear}
+          disabled={!hasRegion}
+          title="Clear clip region"
+          aria-label="Clear clip region"
+        >
+          <ClearIcon />
         </button>
       </div>
 
-      <div
-        className="roto-clip__track"
-        onPointerDown={seekFromPointer}
-        title={duration ? "Click to seek" : undefined}
-      >
-        {/* Selected span at full brightness (full width until a bound is set).
-            Suppressed when the range is inverted (clipStart > clipEnd). */}
-        {hasValidRegion ? (
-          <div
-            className="roto-clip__region"
-            style={{ left: `${regionLeft}%`, width: `${regionRight - regionLeft}%` }}
-          />
-        ) : null}
-        {/* Darkened flanks: the part of the clip outside the selected span. The
-            left flank appears once a start is set, the right once an end is. */}
-        {hasValidRegion && clipStart != null && regionLeft > 0 ? (
-          <div className="roto-clip__mask" style={{ left: 0, width: `${regionLeft}%` }} />
-        ) : null}
-        {hasValidRegion && clipEnd != null && regionRight < 100 ? (
-          <div
-            className="roto-clip__mask"
-            style={{ left: `${regionRight}%`, width: `${100 - regionRight}%` }}
-          />
-        ) : null}
-        {/* Start / end markers. */}
-        {clipStart != null ? (
-          <div className="roto-clip__marker" style={{ left: `${regionLeft}%` }} />
-        ) : null}
-        {clipEnd != null ? (
-          <div className="roto-clip__marker" style={{ left: `${regionRight}%` }} />
-        ) : null}
-        <div className="roto-clip__playhead" style={{ left: `${pct(currentTime)}%` }} />
-      </div>
+      <div className="roto-bar__row roto-bar__row--controls">
+        <select
+          className="roto-bar__speed"
+          value={playbackRate}
+          onChange={(e) => onRate(Number(e.target.value))}
+          title="Playback speed"
+          aria-label="Playback speed"
+        >
+          {PLAYBACK_RATES.map((r) => (
+            <option key={r} value={r}>
+              {r}x
+            </option>
+          ))}
+        </select>
 
-      <div className="roto-clip__inputs">
-        <button
-          type="button"
-          className="roto-clip__set"
-          onClick={() => onSetStart(currentTime)}
-        >
-          Set Start
-        </button>
-        <input
-          className="roto-clip__time"
-          value={startText}
-          placeholder="--:--"
-          aria-label="Clip start time"
-          onChange={(e) => setStartText(e.target.value)}
-          onBlur={() => onSetStart(parseTimecode(startText))}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-          }}
-        />
-        <span className="roto-clip__dash">-</span>
-        <input
-          className="roto-clip__time"
-          value={endText}
-          placeholder="--:--"
-          aria-label="Clip end time"
-          onChange={(e) => setEndText(e.target.value)}
-          onBlur={() => onSetEnd(parseTimecode(endText))}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-          }}
-        />
-        <button
-          type="button"
-          className="roto-clip__set"
-          onClick={() => onSetEnd(currentTime)}
-        >
-          Set End
-        </button>
+        <div className="roto-bar__transport">
+          <button
+            type="button"
+            className="roto-bar__btn"
+            onClick={onRewind}
+            title="Back to clip start"
+            aria-label="Back to clip start"
+          >
+            <RewindIcon />
+          </button>
+          <button
+            type="button"
+            className="roto-bar__btn roto-bar__btn--play"
+            onClick={onTogglePlay}
+            title={playing ? "Pause" : "Play"}
+            aria-label={playing ? "Pause" : "Play"}
+          >
+            {playing ? <PauseIcon /> : <PlayIcon />}
+          </button>
+          <button
+            type="button"
+            className="roto-bar__btn"
+            onClick={onSkip}
+            title="Jump to clip end"
+            aria-label="Jump to clip end"
+          >
+            <SkipIcon />
+          </button>
+        </div>
+
+        <div className="roto-bar__readout">
+          <span className="roto-bar__time">
+            {formatTimecode(currentTime)}
+            {dur ? ` / ${formatTimecode(dur)}` : ""}
+          </span>
+          <span className="roto-bar__frame">
+            frame {Math.max(0, Math.round(currentTime * fps))} @{" "}
+            {fpsKnown ? `${fpsLabel(fps)}fps` : "~30fps"}
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -374,14 +547,12 @@ export default function RotoVideoPanel() {
   const loadedSequence = useRotoStore((s) => s.loadedSequence);
   const comparisonNonce = useRotoStore((s) => s.comparisonNonce);
   const clearSequence = useRotoStore((s) => s.clearSequence);
-  const startFrame = useRotoStore((s) => s.startFrame);
   const clipStart = useRotoStore((s) => s.clipStart);
   const clipEnd = useRotoStore((s) => s.clipEnd);
   const points = useRotoStore((s) => s.points);
   const frameSkip = useRotoStore((s) => s.frameSkip);
   const phase = useRotoStore((s) => s.phase);
   const error = useRotoStore((s) => s.error);
-  const setStartFrame = useRotoStore((s) => s.setStartFrame);
   const setClipStart = useRotoStore((s) => s.setClipStart);
   const setClipEnd = useRotoStore((s) => s.setClipEnd);
 
@@ -390,6 +561,14 @@ export default function RotoVideoPanel() {
 
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [selectMode, setSelectMode] = useState(false);
+  // Source duration probed off the preview <video> element. The store's
+  // LoadedVideo.durationSeconds is never populated (no probe command exists),
+  // so the element's loadedmetadata is the only source that makes the seek track
+  // functional. Falls back to null until metadata loads.
+  const [probedDuration, setProbedDuration] = useState<number | null>(null);
   const [showModal, setShowModal] = useState(false);
 
   // Comparison mode state
@@ -400,13 +579,14 @@ export default function RotoVideoPanel() {
   });
 
   const fps = video?.fps ?? ASSUMED_FPS;
+  const fpsKnown = video?.fps != null;
   const isJobRunning = phase === "uploading" || phase === "processing";
   const fgCount = points.filter((p) => p.label === 1).length;
 
   // Clip range is "set" only when both bounds form a positive span; otherwise the
   // whole source is uploaded.
   const hasClip = clipStart != null && clipEnd != null && clipEnd > clipStart;
-  const duration = video?.durationSeconds ?? null;
+  const duration = video?.durationSeconds ?? probedDuration;
   // The portion that will actually be uploaded: the clip span when set, else the
   // full (probed) duration. null when neither is known.
   const effectiveDuration = hasClip
@@ -416,8 +596,18 @@ export default function RotoVideoPanel() {
   const exceedsCap =
     effectiveDuration != null && effectiveDuration > MAX_CLIP_SECONDS;
 
-  const canGenerate =
-    startFrame != null && fgCount > 0 && !isJobRunning && !!slug && !exceedsCap;
+  // The SAM2 reference frame is implicitly frame 0 of the clip: clipStart, or 0
+  // when no region is set. Used to anchor PointOverlay and to home the playhead.
+  const referenceTime = clipStart ?? 0;
+  const atReference = Math.abs(currentTime - referenceTime) < REFERENCE_EPSILON;
+  // Show the point-placement overlay only while resting on the reference frame;
+  // playing or scrubbing off it reveals the live preview video (see file header).
+  const showOverlay = !playing && atReference;
+
+  // Generation no longer waits for a manual reference-frame lock -- it just needs
+  // at least one foreground point, a project, no in-flight job, and a clip within
+  // the service cap. The reference frame is derived at enqueue from clipStart.
+  const canGenerate = fgCount > 0 && !isJobRunning && !!slug && !exceedsCap;
 
   const canCompare = video != null && loadedSequence != null;
 
@@ -425,6 +615,19 @@ export default function RotoVideoPanel() {
   useEffect(() => {
     if (!canCompare) setComparisonActive(false);
   }, [canCompare]);
+
+  // Reset the local playback view whenever a different source video loads.
+  useEffect(() => {
+    setPlaying(false);
+    setCurrentTime(0);
+    setProbedDuration(null);
+    setSelectMode(false);
+  }, [video?.path]);
+
+  // Keep the preview element's rate in sync with the speed selector.
+  useEffect(() => {
+    if (playerRef.current) playerRef.current.playbackRate = playbackRate;
+  }, [playbackRate]);
 
   // S5: the Outputs pane's "Compare" button loads a (sequence, source-clip) pair
   // and bumps comparisonNonce to ask us to enter comparison mode automatically.
@@ -448,51 +651,114 @@ export default function RotoVideoPanel() {
 
   const videoUrl = video ? convertFileSrc(video.path) : null;
 
-  // --- Setup actions ---------------------------------------------------------
+  // --- Preview transport -----------------------------------------------------
 
-  const lockStartFrame = () => {
-    const t = playerRef.current?.currentTime ?? currentTime;
-    setStartFrame(Math.max(0, Math.round(t * fps)));
+  const seekElement = (t: number) => {
+    const v = playerRef.current;
+    if (!v) return;
+    try {
+      v.currentTime = t;
+    } catch {
+      /* seeking before metadata is ready throws on some platforms; harmless */
+    }
   };
 
-  // S1: spacebar toggles the source scrubber's play/pause. Enabled only while
-  // the scrub <video> is actually the mounted player -- a source is loaded, no
-  // output sequence / comparison is showing, no job is running, and the
-  // reference frame is not yet locked (PointOverlay replaces the <video> once
-  // it is, so playerRef would be stale).
+  const clampTime = (t: number) =>
+    duration ? Math.min(duration, Math.max(0, t)) : Math.max(0, t);
+
+  // Seek to a time and pause there, showing the live frame (overlay hides unless
+  // the target is the reference frame). Used by track-seek, rewind, and skip.
+  const seekTo = (t: number) => {
+    const ct = clampTime(t);
+    setCurrentTime(ct);
+    seekElement(ct);
+    setPlaying(false);
+    playerRef.current?.pause();
+  };
+
+  const togglePlay = () => {
+    const v = playerRef.current;
+    if (!v) return;
+    if (playing) {
+      v.pause();
+      setPlaying(false);
+      return;
+    }
+    // Start playback. Snap into the clip when a region is set (or the playhead
+    // sits past its end), so preview always plays the selected span.
+    let from = currentTime;
+    if (hasClip && (from < (clipStart as number) || from >= (clipEnd as number))) {
+      from = clipStart as number;
+    }
+    seekElement(from);
+    setCurrentTime(from);
+    setPlaying(true);
+    void v.play();
+  };
+
+  const rewind = () => seekTo(referenceTime); // home -> overlay snaps back to frame 0
+  const skip = () => seekTo(hasClip ? (clipEnd as number) : duration ?? referenceTime);
+
+  const onTimeUpdate = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const t = e.currentTarget.currentTime;
+    // Keep transient preview inside the selected region.
+    if (playing && hasClip && t >= (clipEnd as number)) {
+      e.currentTarget.pause();
+      setPlaying(false);
+      setCurrentTime(clipEnd as number);
+      return;
+    }
+    setCurrentTime(t);
+  };
+
+  const onLoadedMeta = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const d = e.currentTarget.duration;
+    if (Number.isFinite(d) && d > 0) setProbedDuration(d);
+    e.currentTarget.playbackRate = playbackRate;
+  };
+
+  // Setting the clip start re-anchors the reference frame; while not previewing,
+  // home the playhead onto it so the overlay + readout follow the new frame 0.
+  const handleSetClipStart = (s: number | null) => {
+    setClipStart(s);
+    if (!playing) {
+      const ref = s ?? 0;
+      setCurrentTime(ref);
+      seekElement(ref);
+    }
+  };
+
+  const handleClear = () => {
+    setClipStart(null);
+    setClipEnd(null);
+    if (!playing) {
+      setCurrentTime(0);
+      seekElement(0);
+    }
+  };
+
+  // Spacebar toggles the source preview's play/pause whenever the source-video
+  // surface is the thing on screen (no output sequence / comparison, no running
+  // job). Same text-entry guard as elsewhere lives in useSpacebarToggle.
   const scrubSpacebarEnabled =
     videoUrl != null &&
     loadedSequence == null &&
     !comparisonActive &&
-    !isJobRunning &&
-    startFrame == null;
-  useSpacebarToggle(scrubSpacebarEnabled, () => {
-    const v = playerRef.current;
-    if (!v) return;
-    if (v.paused) void v.play();
-    else v.pause();
-  });
-
-  // S2: stamping a clip start nudges the playhead to it so locking the
-  // reference frame defaults to the clip's first frame. One-way and only before
-  // a frame is locked, so it never clobbers a frame the user picked first.
-  const handleSetClipStart = (s: number | null) => {
-    setClipStart(s);
-    if (s != null && startFrame == null && playerRef.current) {
-      playerRef.current.currentTime = s;
-      setCurrentTime(s);
-    }
-  };
+    !isJobRunning;
+  useSpacebarToggle(scrubSpacebarEnabled, togglePlay);
 
   // --- Job lifecycle ---------------------------------------------------------
 
   const runJob = (compress: boolean, quality: number) => {
     setShowModal(false);
-    if (!video || startFrame == null || !slug) return;
+    if (!video || !slug) return;
     // Hand the job to the queue. Clip bounds are carried RAW -- the trim runs
     // inside the hook at job-start time, not here, so a queued job that is
-    // cancelled before it runs never spills a temp file. `startFrame` / `fps`
-    // ride along so the hook can rebase the reference frame onto the trim.
+    // cancelled before it runs never spills a temp file. `fps` rides along so
+    // the hook can derive + rebase the reference frame onto the trimmed clip.
+    // `startFrame` is legacy/ignored at run time (the hook derives the reference
+    // from clipStart); pass the same derived value for a faithful summary.
+    const startFrame = Math.round((clipStart ?? 0) * fps);
     const params: RotoscopeParams = {
       slug,
       sourcePath: video.path,
@@ -506,7 +772,7 @@ export default function RotoVideoPanel() {
       fps,
     };
     const basename = video.path.split(/[/\\]/).pop() || video.path;
-    queue.enqueue(params, `${basename} (frame ${startFrame})`);
+    queue.enqueue(params, `${basename}${hasClip ? " (clip)" : ""}`);
   };
 
   const cancelJob = () => {
@@ -593,71 +859,55 @@ export default function RotoVideoPanel() {
             </div>
           ) : null}
 
-          {startFrame == null ? (
-            // Scrubbing view: pick + lock the reference frame.
-            <div className="roto-video__player">
-              {videoUrl ? (
-                <video
-                  ref={playerRef}
-                  className="roto-video__el"
-                  src={videoUrl}
-                  controls
-                  playsInline
-                  onTimeUpdate={(e) =>
-                    setCurrentTime(e.currentTarget.currentTime)
-                  }
-                />
-              ) : null}
-              <div className="roto-video__scrub-row">
-                <span className="roto-video__frame-readout">
-                  frame {Math.max(0, Math.round(currentTime * fps))}
-                  {video.fps == null ? " (est. @ 30fps)" : null}
-                </span>
-                <button
-                  type="button"
-                  className="roto-video__set-start"
-                  onClick={lockStartFrame}
-                >
-                  Set Start Frame
-                </button>
+          <div className="roto-video__editor">
+            {videoUrl ? (
+              <div className="roto-video__stage">
+                {/* Point placement on the reference frame (clip frame 0). Always
+                    mounted so its seeked frame + placed points survive a preview;
+                    hidden (not unmounted) while previewing. */}
+                <div className={`roto-video__overlay-host${showOverlay ? "" : " roto-video__hidden"}`}>
+                  <PointOverlay videoSrc={videoUrl} referenceTimeSeconds={referenceTime} />
+                </div>
+                {/* Live preview surface for the transport. Always mounted (it is
+                    also the only source of `duration` via loadedmetadata); shown
+                    only while playing / scrubbed off the reference frame. */}
+                <div className={`roto-video__preview-wrap${showOverlay ? " roto-video__hidden" : ""}`}>
+                  <video
+                    ref={playerRef}
+                    className="roto-video__preview"
+                    src={videoUrl}
+                    playsInline
+                    muted
+                    preload="auto"
+                    onLoadedMetadata={onLoadedMeta}
+                    onTimeUpdate={onTimeUpdate}
+                    onEnded={() => setPlaying(false)}
+                  />
+                </div>
               </div>
+            ) : null}
 
-              <ClipRangeControl
-                duration={duration}
-                currentTime={currentTime}
-                clipStart={clipStart}
-                clipEnd={clipEnd}
-                onSetStart={handleSetClipStart}
-                onSetEnd={setClipEnd}
-                onSeek={(t) => {
-                  if (playerRef.current) {
-                    playerRef.current.currentTime = t;
-                    setCurrentTime(t);
-                  }
-                }}
-              />
-            </div>
-          ) : (
-            // Locked: point placement on the reference frame + change-frame escape.
-            <>
-              <div className="roto-video__locked-bar">
-                <span>Reference frame: {startFrame}</span>
-                <button
-                  type="button"
-                  className="roto-video__change-start"
-                  onClick={() => setStartFrame(null)}
-                >
-                  Change frame
-                </button>
-              </div>
-              {videoUrl ? (
-                <PointOverlay
-                  videoSrc={videoUrl}
-                  referenceTimeSeconds={startFrame / fps}
-                />
-              ) : null}
-            </>
-          )}
+            <ClipRangeControl
+              duration={duration}
+              currentTime={currentTime}
+              clipStart={clipStart}
+              clipEnd={clipEnd}
+              fps={fps}
+              fpsKnown={fpsKnown}
+              playing={playing}
+              playbackRate={playbackRate}
+              selectMode={selectMode}
+              onSeek={seekTo}
+              onSetClipStart={handleSetClipStart}
+              onSetClipEnd={setClipEnd}
+              onToggleSelect={() => setSelectMode((v) => !v)}
+              onClear={handleClear}
+              onTogglePlay={togglePlay}
+              onRewind={rewind}
+              onSkip={skip}
+              onRate={setPlaybackRate}
+            />
+          </div>
 
           {exceedsCap ? (
             <div className="roto-video__cap-warn">
@@ -746,40 +996,26 @@ const STYLES = `
   border: 1px solid #2a5c38;
   border-radius: 5px;
 }
-.roto-video__player {
+.roto-video__editor {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+}
+.roto-video__stage {
+  display: block;
+}
+.roto-video__hidden {
+  display: none !important;
+}
+.roto-video__preview-wrap {
   padding: 8px 12px;
 }
-.roto-video__el {
+.roto-video__preview {
   display: block;
   width: 100%;
   max-height: 60vh;
   background: #000;
   border-radius: 6px;
   object-fit: contain;
-}
-.roto-video__scrub-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.roto-video__frame-readout {
-  font-size: 11px;
-  color: var(--text-faint);
-}
-.roto-video__set-start {
-  padding: 5px 14px;
-  font-size: 12px;
-  font-weight: 600;
-  font-family: inherit;
-  color: #fff;
-  background: var(--accent, #6ea8fe);
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
 }
 .roto-video__cap-warn {
   margin: 8px 12px 0;
@@ -791,26 +1027,26 @@ const STYLES = `
   border: 1px solid #5c4f2a;
   border-radius: 5px;
 }
-.roto-clip {
+
+/* --- Custom two-row control bar ------------------------------------------- */
+.roto-bar {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding-top: 4px;
+  gap: 8px;
+  padding: 4px 12px 8px;
 }
-.roto-clip__head {
+.roto-bar__row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
 }
-.roto-clip__label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-}
-.roto-clip__clear {
-  padding: 2px 8px;
-  font-size: 10px;
+.roto-bar__select {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  font-size: 11px;
   font-family: inherit;
   color: var(--text-muted);
   background: transparent;
@@ -818,45 +1054,59 @@ const STYLES = `
   border-radius: 4px;
   cursor: pointer;
 }
-.roto-clip__clear:disabled {
-  opacity: 0.4;
-  cursor: default;
+.roto-bar__select--on {
+  color: var(--accent, #6ea8fe);
+  border-color: var(--accent, #6ea8fe);
+  background: rgba(110, 168, 254, 0.10);
 }
-.roto-clip__track {
+.roto-bar__track {
   position: relative;
+  flex: 1 1 auto;
   height: 26px;
   border-radius: 5px;
   background: var(--surface);
   border: 1px solid var(--border-soft);
   cursor: pointer;
   overflow: hidden;
+  touch-action: none;
+  user-select: none;
 }
-.roto-clip__region {
+.roto-bar__track--select {
+  cursor: ew-resize;
+  border-color: var(--accent, #6ea8fe);
+}
+.roto-bar__region {
   position: absolute;
   top: 0;
   bottom: 0;
-  /* The selected span reads at full brightness in the accent color. */
   background: var(--accent, #6ea8fe);
   opacity: 0.85;
+  pointer-events: none;
 }
-.roto-clip__mask {
+.roto-bar__region--dim {
+  /* No region set yet: the whole-clip span reads faint, visually distinct from
+     a region explicitly set to the full length (full opacity). */
+  opacity: 0.18;
+}
+.roto-bar__mask {
   position: absolute;
   top: 0;
   bottom: 0;
-  /* Darken the clip outside the selected span (Resolve-style trim shading). */
   background: rgba(0, 0, 0, 0.5);
   pointer-events: none;
 }
-.roto-clip__marker {
+.roto-bar__handle {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  margin-left: -1px;
-  background: var(--accent, #6ea8fe);
+  top: -2px;
+  bottom: -2px;
+  width: 4px;
+  margin-left: -2px;
+  border-radius: 2px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
   pointer-events: none;
 }
-.roto-clip__playhead {
+.roto-bar__playhead {
   position: absolute;
   top: -1px;
   bottom: -1px;
@@ -865,53 +1115,73 @@ const STYLES = `
   background: #fff;
   pointer-events: none;
 }
-.roto-clip__inputs {
-  display: flex;
+.roto-bar__clear {
+  flex: none;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-}
-.roto-clip__time {
-  width: 64px;
-  padding: 3px 6px;
-  font-size: 11px;
-  font-family: inherit;
-  text-align: center;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border-soft);
-  border-radius: 4px;
-}
-.roto-clip__dash {
-  color: var(--text-faint);
-}
-.roto-clip__set {
-  padding: 3px 10px;
-  font-size: 11px;
-  font-family: inherit;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border-soft);
-  border-radius: 4px;
-  cursor: pointer;
-}
-.roto-video__locked-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 8px 12px 0;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-.roto-video__change-start {
-  padding: 3px 10px;
-  font-size: 11px;
-  font-family: inherit;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
   color: var(--text-muted);
   background: transparent;
   border: 1px solid var(--border-soft);
   border-radius: 4px;
   cursor: pointer;
+}
+.roto-bar__clear:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.roto-bar__row--controls {
+  gap: 10px;
+}
+.roto-bar__speed {
+  flex: none;
+  padding: 3px 6px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.roto-bar__transport {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.roto-bar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.roto-bar__btn--play {
+  color: #fff;
+  background: var(--accent, #6ea8fe);
+  border-color: var(--accent, #6ea8fe);
+}
+.roto-bar__readout {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.roto-bar__time {
+  font-size: 11px;
+  color: var(--text);
+}
+.roto-bar__frame {
+  font-size: 11px;
+  color: var(--text-faint);
 }
 .roto-video__seq {
   display: flex;
