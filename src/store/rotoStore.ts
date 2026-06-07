@@ -129,16 +129,6 @@ export interface RotoState {
    */
   loadedSequence: LoadedSequence | null;
   /**
-   * LEGACY / transient scrub position, or null. No longer the canonical SAM2
-   * reference input: the reference frame is now derived deterministically at
-   * enqueue (frame 0 of the selected clip -- `round(clipStart * fps)`, else 0;
-   * see useRotoJobQueue.runJob and decision `roto-reference-frame-is-clip-frame-zero`).
-   * This field + `setStartFrame` are retained only so the not-yet-removed manual
-   * "Set Start Frame" UI in RotoVideoPanel still compiles; T-010 removes that UI,
-   * after which this can be dropped. Whatever value it holds is IGNORED by the job.
-   */
-  startFrame: number | null;
-  /**
    * Clip-range bounds in seconds on the SOURCE timeline, or null when unset.
    * When both are set the submit flow trims the source to [clipStart, clipEnd]
    * before upload (T-015). null/null means upload the whole source. These are
@@ -188,12 +178,12 @@ export interface RotoState {
   setServiceAvailability: (status: RotoscopingStatus) => void;
 
   // --- Setup actions ---------------------------------------------------------
-  /** Load a source video into the preview pane; resets start frame + points
+  /** Load a source video into the preview pane; resets the clip range + points
    *  and clears any loaded output sequence. */
   loadVideo: (video: LoadedVideo) => void;
   /**
    * Load a source video for comparison. Mirrors `loadVideo`'s setup resets
-   * (clears startFrame/clipStart/clipEnd/points and the job phase/error/progress)
+   * (clears clipStart/clipEnd/points and the job phase/error/progress)
    * but does NOT clear `loadedSequence` -- the one difference from `loadVideo`.
    *
    * CALLER CONTRACT: this exists solely for the Outputs pane "Compare" button.
@@ -209,13 +199,6 @@ export interface RotoState {
   loadSequence: (sequence: LoadedSequence) => void;
   /** Clear the loaded output sequence (returns to the source-video view). */
   clearSequence: () => void;
-  /**
-   * LEGACY setter for `startFrame`. The SAM2 reference frame is no longer chosen
-   * by a manual gesture -- it is derived from `clipStart` at enqueue (see the
-   * `startFrame` field doc). Retained only until T-010 removes the manual UI that
-   * still calls it; the value it sets is not read by the job.
-   */
-  setStartFrame: (frame: number | null) => void;
   /** Set the clip-range start in seconds (clamped to >= 0), or null to clear. */
   setClipStart: (seconds: number | null) => void;
   /** Set the clip-range end in seconds (clamped to >= 0), or null to clear. */
@@ -268,7 +251,6 @@ function outputNameFromDir(dir: string): string {
 const FRESH_SETUP = {
   video: null,
   loadedSequence: null,
-  startFrame: null,
   clipStart: null,
   clipEnd: null,
   points: [] as RotoPoint[],
@@ -296,7 +278,6 @@ export const useRotoStore = create<RotoState>((set) => ({
     set({
       video,
       loadedSequence: null,
-      startFrame: null,
       clipStart: null,
       clipEnd: null,
       points: [],
@@ -314,7 +295,6 @@ export const useRotoStore = create<RotoState>((set) => ({
       // Mirror loadVideo's setup resets so exiting comparison never leaves the
       // PRIOR video's locked reference frame / points submittable over the new
       // source clip -- but KEEP loadedSequence (the whole point of this path).
-      startFrame: null,
       clipStart: null,
       clipEnd: null,
       points: [],
@@ -326,8 +306,6 @@ export const useRotoStore = create<RotoState>((set) => ({
   loadSequence: (loadedSequence) => set({ loadedSequence }),
 
   clearSequence: () => set({ loadedSequence: null }),
-
-  setStartFrame: (startFrame) => set({ startFrame }),
 
   setClipStart: (seconds) =>
     set({ clipStart: seconds == null ? null : Math.max(0, seconds) }),
