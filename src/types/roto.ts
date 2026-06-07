@@ -132,16 +132,21 @@ export interface LoadedVideo {
  * video), not pre-trimmed: the trim (`invoke("trim_video", ...)`) is performed
  * inside `_processNext` at run time. Eager trimming at enqueue time would block
  * the UI and spill temp files for jobs the user may cancel before they ever run.
- * `startFrame` is likewise source-relative and rebased onto the trimmed clip at
- * run time; `fps` is carried so that rebase (`startFrame - clipStart*fps`) can be
- * computed without re-reading the source video. `host` is intentionally absent --
- * it is read from localStorage inside `_processNext`, not captured here.
+ * `startFrame` is LEGACY and ignored at run time: the SAM2 reference frame is now
+ * derived deterministically from `clipStart` (`round(clipStart*fps)`, else 0; see
+ * useRotoJobQueue.runJob and decision roto-reference-frame-is-clip-frame-zero), so
+ * `fps` is what carries that derivation. `host` is intentionally absent -- it is
+ * read from localStorage inside `_processNext`, not captured here.
  */
 export interface RotoscopeParams {
   slug: string;
   /** Original source file path (pre-trim). */
   sourcePath: string;
-  /** Reference frame index, source-relative (rebased onto the trim at run time). */
+  /**
+   * LEGACY scrub position; IGNORED at run time. The reference frame is derived
+   * from `clipStart` (see this interface's doc + useRotoJobQueue.runJob). Still
+   * captured by the not-yet-removed manual UI (RotoVideoPanel); T-010 drops it.
+   */
   startFrame: number;
   /** Clip start in source-relative seconds, or null for the whole video. */
   clipStart: number | null;

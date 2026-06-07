@@ -118,14 +118,23 @@ export interface RotoState {
    * it; `clearSequence` returns to whatever source-video state was underneath.
    */
   loadedSequence: LoadedSequence | null;
-  /** The locked reference frame index, or null until "Set Start Frame". */
+  /**
+   * LEGACY / transient scrub position, or null. No longer the canonical SAM2
+   * reference input: the reference frame is now derived deterministically at
+   * enqueue (frame 0 of the selected clip -- `round(clipStart * fps)`, else 0;
+   * see useRotoJobQueue.runJob and decision `roto-reference-frame-is-clip-frame-zero`).
+   * This field + `setStartFrame` are retained only so the not-yet-removed manual
+   * "Set Start Frame" UI in RotoVideoPanel still compiles; T-010 removes that UI,
+   * after which this can be dropped. Whatever value it holds is IGNORED by the job.
+   */
   startFrame: number | null;
   /**
    * Clip-range bounds in seconds on the SOURCE timeline, or null when unset.
    * When both are set the submit flow trims the source to [clipStart, clipEnd]
    * before upload (T-015). null/null means upload the whole source. These are
-   * SOURCE-relative; the reference `startFrame` is rebased onto the trimmed clip
-   * at submit time, not stored rebased.
+   * SOURCE-relative; `clipStart` also IS the SAM2 reference frame: the reference
+   * is derived at enqueue as `round(clipStart * fps)` (else 0), which rebases to
+   * frame 0 of the trimmed clip.
    */
   clipStart: number | null;
   clipEnd: number | null;
@@ -188,7 +197,12 @@ export interface RotoState {
   loadSequence: (sequence: LoadedSequence) => void;
   /** Clear the loaded output sequence (returns to the source-video view). */
   clearSequence: () => void;
-  /** Lock the current scrub position as the reference frame. */
+  /**
+   * LEGACY setter for `startFrame`. The SAM2 reference frame is no longer chosen
+   * by a manual gesture -- it is derived from `clipStart` at enqueue (see the
+   * `startFrame` field doc). Retained only until T-010 removes the manual UI that
+   * still calls it; the value it sets is not read by the job.
+   */
   setStartFrame: (frame: number | null) => void;
   /** Set the clip-range start in seconds (clamped to >= 0), or null to clear. */
   setClipStart: (seconds: number | null) => void;

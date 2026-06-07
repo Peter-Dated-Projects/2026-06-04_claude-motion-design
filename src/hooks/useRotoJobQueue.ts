@@ -140,7 +140,16 @@ function useRotoJobQueue(): RotoJobQueueApi {
       const host = localStorage.getItem(ROTO_HOST_KEY) || "localhost";
       try {
         let sourcePath = params.sourcePath;
-        let effectiveStartFrame = params.startFrame;
+        // The SAM2 reference frame is deterministically frame 0 of the selected
+        // clip -- `round(clipStart * fps)` (source-relative) when a region is set,
+        // else 0. It is DERIVED here, not taken from `params.startFrame` (the old
+        // manual "Set Start Frame" lock; see decision roto-reference-frame-is-
+        // clip-frame-zero). With no clip range this stays source-relative and
+        // rotoscope_video re-clips with gte(n, startFrame) on the full source.
+        let effectiveStartFrame =
+          params.clipStart != null
+            ? Math.round(params.clipStart * params.fps)
+            : 0;
 
         // Trim step: when a clip range is set, trim the source first and rebase
         // the reference frame onto the trimmed clip (the trim drops the first
@@ -158,9 +167,14 @@ function useRotoJobQueue(): RotoJobQueueApi {
             processNextRef.current();
             return;
           }
+          // Rebase the source-relative reference onto the trimmed clip. Because
+          // the reference IS `round(clipStart * fps)`, this subtraction is always
+          // 0 here -- i.e. frame 0 of the trimmed clip -- but it is kept as the
+          // explicit formula so the invariant survives any future change to how
+          // the reference is derived above.
           effectiveStartFrame = Math.max(
             0,
-            params.startFrame - Math.round(params.clipStart * params.fps),
+            effectiveStartFrame - Math.round(params.clipStart * params.fps),
           );
         }
 
