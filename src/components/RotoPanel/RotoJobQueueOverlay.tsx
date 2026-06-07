@@ -117,7 +117,7 @@ const STYLES = `
   bottom: 60px;
   z-index: 1000;
   display: flex;
-  flex-direction: column-reverse;
+  flex-direction: column;
   gap: 8px;
   pointer-events: none;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
