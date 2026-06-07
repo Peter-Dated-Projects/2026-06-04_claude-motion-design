@@ -27,6 +27,9 @@ interface RotoOutput {
   dir: string;
   source: string | null;
   frameSkip: number | null;
+  /** Probed source fps from meta.json, or null (older outputs / not yet
+   *  recorded by the bridge -> falls back to the 30fps estimate). */
+  sourceFps: number | null;
   frameCount: number;
   thumbnail: string | null;
   frames: string[];
@@ -47,10 +50,12 @@ interface RotoOutputFiles {
 const ASSUMED_FPS = 30;
 
 /** Effective stop-motion fps for an output: source fps / (frame_skip + 1).
- *  frame_skip falls back to the proposal default (3) when meta.json is absent. */
-function effectiveFps(frameSkip: number | null): number {
-  const skip = frameSkip ?? 3;
-  return ASSUMED_FPS / (skip + 1);
+ *  `sourceFps` is the probed source rate from meta.json; it falls back to the
+ *  30fps assumption when null (older outputs, or before the bridge records it).
+ *  `frameSkip` falls back to the proposal default (3) when meta.json is absent. */
+function effectiveFps(frameSkip: number | null, sourceFps: number | null): number {
+  const fps = sourceFps ?? ASSUMED_FPS;
+  return fps / ((frameSkip ?? 3) + 1);
 }
 
 export default function RotoOutputsPanel() {
@@ -123,7 +128,7 @@ export default function RotoOutputsPanel() {
         name: output.name,
         dir: output.dir,
         urls: output.frames.map((p) => convertFileSrc(p)),
-        fps: effectiveFps(output.frameSkip),
+        fps: effectiveFps(output.frameSkip, output.sourceFps),
       });
     },
     [loadSequence],
