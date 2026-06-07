@@ -13,10 +13,16 @@ it as loaded and every job reuses the in-VRAM model. Each job:
 CUDA OOM is caught, state is reset, and a RotoscopeOOMError is raised so the API
 layer can return a 500 suggesting a shorter clip or higher frame skip.
 
-VERSION-SENSITIVE: the build call uses SAM2_CONFIG_NAME / CHECKPOINT_PATH from
-config.py. If you bump the sam-2 package, re-verify those names there -- this
-module never hardcodes them. Developed on a Mac without CUDA, so the GPU paths
-here could not be executed; assumptions are flagged with VERIFY comments.
+The model is swappable per job: load_predictor(size) reuses the warm predictor
+when the requested size is already resident, and otherwise tears it down and
+rebuilds for the new size (at most one model in VRAM). Callers serialize this
+against jobs by holding GPU_LOCK so a swap never runs mid-job.
+
+VERSION-SENSITIVE: the build call uses the (config, checkpoint) pair from
+config.model_triple(size). If you bump the sam-2 package, re-verify the names in
+config.MODEL_SIZES -- this module never hardcodes them. Developed on a Mac without
+CUDA, so the GPU paths here could not be executed; assumptions are flagged with
+VERIFY comments.
 """
 
 from __future__ import annotations
@@ -74,6 +80,13 @@ def log_memory(log: logging.Logger, label: str) -> None:
 
 # Module-level predictor, populated by load_predictor() at startup.
 _predictor = None
+
+# Size label (a key of config.MODEL_SIZES) of the model currently resident in
+# VRAM, or None when no predictor is loaded. load_predictor() compares a requested
+# size against this to decide whether to reuse the warm predictor or swap (decision
+# 2: offload only on an actual change). At most one model is ever resident
+# (decision 3) -- swaps tear down the old one before building the new.
+_resident_size: Optional[str] = None
 
 # One-time GPU configuration profile, populated by load_predictor() via
 # _probe_gpu(). Holds the autocast dtype, TF32 setting, and JSON-safe labels for
@@ -198,39 +211,25 @@ class RotoscopeCancelled(RuntimeError):
     """The job was cancelled mid-propagation."""
 
 
-def load_predictor():
-    """Build the SAM2 video predictor once and cache it. Returns the predictor.
+def _build_predictor(config_name: str, checkpoint_path: Path, use_flash: bool):
+    """Build a SAM2 video predictor for one (config, checkpoint) pair.
 
     Imported lazily so the module imports cleanly on a machine without the CUDA
-    torch build (e.g. the Mac dev box) -- import main works; only startup, which
-    calls this, requires CUDA.
+    torch build (e.g. the Mac dev box). Holds the three-way flash-attn fallback
+    cascade (see the comments inline). Returns the built predictor.
     """
-    global _predictor, _GPU_PROFILE
-    if _predictor is not None:
-        return _predictor
-
     from sam2.build_sam import build_sam2_video_predictor
 
-    # One-time GPU probe before the build: picks the autocast dtype + TF32 and
-    # gates FlashAttention. Raises RuntimeError on a non-CUDA box; startup
-    # catches it to exit cleanly.
-    _GPU_PROFILE = _probe_gpu()
-
-    # FlashAttention-2 / SDPA is available on Ada (sm_89), Hopper (sm_90) and
-    # Blackwell (sm_100+); Ampere and below default to standard attention.
-    # VERIFY: that build_sam2_video_predictor accepts use_flash_attn on the
-    # installed sam2 build (added with the GPU probe, never run on this Mac).
-    use_flash = _GPU_PROFILE["generation"] in ("ada", "hopper", "blackwell")
     logger.info(
         "Building SAM2 predictor (config=%s checkpoint=%s use_flash_attn=%s)",
-        config.SAM2_CONFIG_NAME,
-        config.CHECKPOINT_PATH,
+        config_name,
+        checkpoint_path,
         use_flash,
     )
     try:
-        _predictor = build_sam2_video_predictor(
-            config.SAM2_CONFIG_NAME,
-            str(config.CHECKPOINT_PATH),
+        return build_sam2_video_predictor(
+            config_name,
+            str(checkpoint_path),
             device="cuda",
             use_flash_attn=use_flash,
         )
@@ -243,9 +242,9 @@ def load_predictor():
         logger.warning(
             "flash-attn not available on this system; building without FlashAttention"
         )
-        _predictor = build_sam2_video_predictor(
-            config.SAM2_CONFIG_NAME,
-            str(config.CHECKPOINT_PATH),
+        return build_sam2_video_predictor(
+            config_name,
+            str(checkpoint_path),
             device="cuda",
             use_flash_attn=False,
         )
@@ -262,17 +261,98 @@ def load_predictor():
             "(signature mismatch: %s); building without it",
             exc,
         )
-        _predictor = build_sam2_video_predictor(
-            config.SAM2_CONFIG_NAME,
-            str(config.CHECKPOINT_PATH),
+        return build_sam2_video_predictor(
+            config_name,
+            str(checkpoint_path),
             device="cuda",
         )
-    logger.info("SAM2 predictor loaded")
+
+
+def _teardown_predictor() -> None:
+    """Drop the resident predictor and free its VRAM ahead of a size swap.
+
+    Decision 3 keeps at most one model resident, so a swap tears down the old
+    predictor (drop the only strong reference + empty_cache) before building the
+    new one -- never co-loads two. Caller holds GPU_LOCK, so this never races a job.
+    """
+    global _predictor, _resident_size
+    _predictor = None
+    _resident_size = None
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def load_predictor(size: Optional[str] = None):
+    """Build (or reuse) the SAM2 video predictor for `size`. Returns the predictor.
+
+    `size` is a key of config.MODEL_SIZES. Behavior:
+      - size=None: reuse whatever is resident; if nothing is loaded, build the
+        launched default (config.DEFAULT_MODEL_SIZE). This is what run_job and
+        startup call -- they take whatever model the job's swap already made
+        resident, and never trigger an unwanted reload.
+      - size == resident size: reuse the warm predictor verbatim. NO teardown, NO
+        reload (decision 2 -- the common repeated-jobs-at-one-size case).
+      - size != resident size: tear down the resident predictor + empty_cache,
+        then build the requested triple (decision 3, swap not co-load).
+
+    Callers MUST serialize this against jobs (hold GPU_LOCK) -- the global swap
+    must never run mid-job (decision 4). The checkpoint must already be on disk;
+    main.py downloads it before calling here.
+
+    Imported lazily inside _build_predictor so this module imports cleanly on a
+    non-CUDA box; only the build path requires CUDA.
+    """
+    global _predictor, _GPU_PROFILE, _resident_size
+
+    if size is None:
+        if _predictor is not None:
+            return _predictor
+        size = config.DEFAULT_MODEL_SIZE
+
+    if _predictor is not None and _resident_size == size:
+        return _predictor
+
+    if _predictor is not None:
+        logger.info("Swapping SAM2 model %s -> %s", _resident_size, size)
+        _teardown_predictor()
+
+    triple = config.model_triple(size)
+
+    # One-time GPU probe before the first build: picks the autocast dtype + TF32
+    # and gates FlashAttention. Raises RuntimeError on a non-CUDA box; startup
+    # catches it to exit cleanly. The profile is GPU hardware, not model-specific,
+    # so it is probed once and reused across swaps.
+    if _GPU_PROFILE is None:
+        _GPU_PROFILE = _probe_gpu()
+
+    # FlashAttention-2 / SDPA is available on Ada (sm_89), Hopper (sm_90) and
+    # Blackwell (sm_100+); Ampere and below default to standard attention.
+    # VERIFY: that build_sam2_video_predictor accepts use_flash_attn on the
+    # installed sam2 build (added with the GPU probe, never run on this Mac).
+    use_flash = _GPU_PROFILE["generation"] in ("ada", "hopper", "blackwell")
+    _predictor = _build_predictor(triple.config_name, triple.checkpoint_path, use_flash)
+    _resident_size = size
+    logger.info("SAM2 predictor loaded (size=%s label=%s)", size, triple.label)
     return _predictor
 
 
 def is_loaded() -> bool:
     return _predictor is not None
+
+
+def resident_size() -> Optional[str]:
+    """Size label of the model currently in VRAM, or None if none loaded."""
+    return _resident_size
+
+
+def model_label() -> str:
+    """Short label of the resident model for /health + meta.json.
+
+    Falls back to the launched default's label before the first load so /health
+    has something coherent to report during startup.
+    """
+    size = _resident_size if _resident_size is not None else config.DEFAULT_MODEL_SIZE
+    return config.model_triple(size).label
 
 
 def vram_stats() -> tuple[float, float]:

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
+from typing import NamedTuple
 
 logger = logging.getLogger("rotoscoping.config")
 
@@ -72,33 +73,114 @@ for _d in (MODELS_DIR, BIN_DIR, WORK_DIR, LOGS_DIR):
 
 # --- SAM2 model ------------------------------------------------------------
 
-# VERIFY: these three must agree with the installed `sam2` package version.
-# Default is the original SAM2 "base_plus" release -- one size below large:
-# smaller checkpoint, lower VRAM, faster, at some cost to fine-edge mask quality.
-# Override ROTO_SAM2_* to switch models, but move all three together (e.g. to go
-# back to large: sam2_hiera_large.pt + configs/sam2/sam2_hiera_l.yaml + the
-# .../072824/sam2_hiera_large.pt URL; a 2.1 build uses the 092824 URL + sam2.1 names).
-SAM2_CHECKPOINT_NAME: str = os.environ.get(
-    "ROTO_SAM2_CHECKPOINT", "sam2_hiera_base_plus.pt"
-)
-# Hydra config name resolved from inside the installed sam2 package (hydra is
-# initialized with config module "sam2", so this path is relative to the package
-# root). Note the config uses the short size code `b+`, NOT `base_plus` like the
-# checkpoint, and lives under `configs/sam2/`. The 2.1 build uses
-# `configs/sam2.1/sam2.1_hiera_b+.yaml`. Keep it in lockstep with the checkpoint.
-SAM2_CONFIG_NAME: str = os.environ.get(
-    "ROTO_SAM2_CONFIG", "configs/sam2/sam2_hiera_b+.yaml"
-)
-SAM2_CHECKPOINT_URL: str = os.environ.get(
-    "ROTO_SAM2_CHECKPOINT_URL",
-    "https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_base_plus.pt",
-)
+# Per-job model-size selection (Option B). The service can swap between four SAM2
+# sizes; a job names one via the `model_size` POST field, and the engine swaps the
+# single resident predictor only when the requested size differs from what is
+# loaded (see sam2_engine.load_predictor / decisions in the project doc).
+#
+# BUILD: we standardize on the original SAM2 *2.0* release (the `072824` URL date).
+# That is what config defaulted to before this change, what the engine's API
+# assumptions were written against, and the only build the existing base_plus path
+# was verified-as-written for. To move to 2.1 instead, the WHOLE map changes in
+# lockstep: 092824 URL date, `sam2.1_hiera_*.pt` checkpoints, and
+# `configs/sam2.1/sam2.1_hiera_*.yaml` configs.
+#
+# NAMING SPLIT (load-bearing): the Hydra config uses the SHORT size code in its
+# filename (`t`/`s`/`b+`/`l`) while the checkpoint uses the LONG name
+# (`tiny`/`small`/`base_plus`/`large`). The triple (checkpoint_name, config_name,
+# url) therefore must be spelled out per size -- you cannot derive one from the
+# other. Configs are resolved from INSIDE the installed `sam2` package (hydra is
+# initialized with config module "sam2"), so they are package-relative paths under
+# `configs/sam2/`, not files on disk here.
+#
+# VERIFY: these must agree with the installed `sam2` package version on the CUDA
+# box. base_plus and large match what config.py documented before this change.
+_SAM2_URL_BASE: str = "https://dl.fbaipublicfiles.com/segment_anything_2/072824"
+MODEL_SIZES: dict[str, tuple[str, str, str]] = {
+    "tiny": (
+        "sam2_hiera_tiny.pt",
+        "configs/sam2/sam2_hiera_t.yaml",
+        f"{_SAM2_URL_BASE}/sam2_hiera_tiny.pt",
+    ),
+    "small": (
+        "sam2_hiera_small.pt",
+        "configs/sam2/sam2_hiera_s.yaml",
+        f"{_SAM2_URL_BASE}/sam2_hiera_small.pt",
+    ),
+    "base_plus": (
+        "sam2_hiera_base_plus.pt",
+        "configs/sam2/sam2_hiera_b+.yaml",
+        f"{_SAM2_URL_BASE}/sam2_hiera_base_plus.pt",
+    ),
+    "large": (
+        "sam2_hiera_large.pt",
+        "configs/sam2/sam2_hiera_l.yaml",
+        f"{_SAM2_URL_BASE}/sam2_hiera_large.pt",
+    ),
+}
 
-# Short label reported by /health and stored in each job's meta.json. Derived
-# from the checkpoint name without the extension.
-MODEL_LABEL: str = Path(SAM2_CHECKPOINT_NAME).stem
+# The size loaded at startup and used when a job omits `model_size` (backwards
+# compatible: older clients send no size and get this). Override with
+# ROTO_SAM2_SIZE; falls back to the long-standing base_plus default.
+DEFAULT_MODEL_SIZE: str = os.environ.get("ROTO_SAM2_SIZE", "base_plus")
+if DEFAULT_MODEL_SIZE not in MODEL_SIZES:
+    logger.warning(
+        "ROTO_SAM2_SIZE=%r is not a known size %s; falling back to base_plus",
+        DEFAULT_MODEL_SIZE,
+        sorted(MODEL_SIZES),
+    )
+    DEFAULT_MODEL_SIZE = "base_plus"
 
-CHECKPOINT_PATH: Path = MODELS_DIR / SAM2_CHECKPOINT_NAME
+
+class ModelTriple(NamedTuple):
+    """A resolved SAM2 model: its size label plus the three lockstep assets."""
+
+    size: str
+    checkpoint_name: str
+    config_name: str
+    url: str
+
+    @property
+    def checkpoint_path(self) -> Path:
+        return MODELS_DIR / self.checkpoint_name
+
+    @property
+    def label(self) -> str:
+        """Short label for /health + meta.json, e.g. 'sam2_hiera_base_plus'."""
+        return Path(self.checkpoint_name).stem
+
+
+def model_triple(size: str) -> ModelTriple:
+    """Resolve a size name to its (checkpoint, config, url) triple.
+
+    The legacy ROTO_SAM2_CHECKPOINT / _CONFIG / _CHECKPOINT_URL env vars still
+    work, but ONLY as an override of the DEFAULT size's triple (backwards compat).
+    Requesting any other size always uses the built-in map. Raises ValueError on
+    an unknown size so the API layer can return a 400.
+    """
+    if size not in MODEL_SIZES:
+        raise ValueError(
+            f"unknown model_size {size!r}; valid sizes: {sorted(MODEL_SIZES)}"
+        )
+    checkpoint_name, config_name, url = MODEL_SIZES[size]
+    if size == DEFAULT_MODEL_SIZE:
+        checkpoint_name = os.environ.get("ROTO_SAM2_CHECKPOINT", checkpoint_name)
+        config_name = os.environ.get("ROTO_SAM2_CONFIG", config_name)
+        url = os.environ.get("ROTO_SAM2_CHECKPOINT_URL", url)
+    return ModelTriple(size, checkpoint_name, config_name, url)
+
+
+# Backwards-compatible module constants describing the DEFAULT (launched) model.
+# Kept so any external reader of the old names still works; size-aware code calls
+# model_triple(size) instead. MODEL_LABEL here is the launched size's label --
+# /health reports the *resident* label via sam2_engine, which can differ after a
+# swap.
+_DEFAULT_TRIPLE: ModelTriple = model_triple(DEFAULT_MODEL_SIZE)
+SAM2_CHECKPOINT_NAME: str = _DEFAULT_TRIPLE.checkpoint_name
+SAM2_CONFIG_NAME: str = _DEFAULT_TRIPLE.config_name
+SAM2_CHECKPOINT_URL: str = _DEFAULT_TRIPLE.url
+MODEL_LABEL: str = _DEFAULT_TRIPLE.label
+CHECKPOINT_PATH: Path = _DEFAULT_TRIPLE.checkpoint_path
 
 # --- ffmpeg ----------------------------------------------------------------
 
