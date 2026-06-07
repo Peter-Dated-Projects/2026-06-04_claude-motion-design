@@ -717,7 +717,21 @@ pub fn list_project_videos(app: AppHandle, slug: String) -> Result<Vec<ProjectVi
     if !dir.is_dir() {
         return Err(format!("project '{slug}' not found"));
     }
-    Ok(read_project_meta(&dir)?.videos)
+    let videos = read_project_meta(&dir)?.videos;
+    // Source videos are referenced in place, so their paths live OUTSIDE the
+    // static asset-protocol scope in tauri.conf.json (which only covers
+    // `extractions/**` and `assets/**`). The file-picker dialog grants the picked
+    // path to the asset scope for that session only; after an app restart a video
+    // restored from this persisted list was never picked again, so without a
+    // re-grant `convertFileSrc` yields an asset:// URL the webview blocks -- the
+    // source video and its frames stop being previewable. Re-grant each registered
+    // path here (this runs on every Assets-panel mount/refresh, before the restore
+    // loads the stored path), re-establishing the session grant.
+    let scope = app.asset_protocol_scope();
+    for v in &videos {
+        let _ = scope.allow_file(&v.path);
+    }
+    Ok(videos)
 }
 
 /// Register a source video with a project and return it. Idempotent: if `path`
