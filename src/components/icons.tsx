@@ -82,6 +82,15 @@ export function PlusIcon({ size = 14, className }: IconProps) {
   );
 }
 
+export function TrashIcon({ size = 15, className }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <path d="M2.8 4.4h10.4M6.4 4.4V3.2a1 1 0 0 1 1-1h1.2a1 1 0 0 1 1 1v1.2M11.8 4.4l-.5 8a1 1 0 0 1-1 .95H5.7a1 1 0 0 1-1-.95l-.5-8" />
+      <path d="M6.8 7v3.6M9.2 7v3.6" />
+    </svg>
+  );
+}
+
 // --- Workspace-stage icons --------------------------------------------------
 // One per stage of the design workflow, referenced by key from the workspace
 // bar's icon registry. Same 16-viewBox / currentColor convention as the rest.
