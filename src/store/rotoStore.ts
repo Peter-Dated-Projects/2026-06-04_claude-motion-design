@@ -171,8 +171,9 @@ export interface RotoState {
    *  and clears any loaded output sequence. */
   loadVideo: (video: LoadedVideo) => void;
   /**
-   * Load a source video for comparison WITHOUT clearing `loadedSequence` (the
-   * one difference from `loadVideo`).
+   * Load a source video for comparison. Mirrors `loadVideo`'s setup resets
+   * (clears startFrame/clipStart/clipEnd/points and the job phase/error/progress)
+   * but does NOT clear `loadedSequence` -- the one difference from `loadVideo`.
    *
    * CALLER CONTRACT: this exists solely for the Outputs pane "Compare" button.
    * Because it does not clear `loadedSequence`, the caller MUST set both sides
@@ -277,7 +278,20 @@ export const useRotoStore = create<RotoState>((set) => ({
       error: null,
     }),
 
-  loadVideoForComparison: (video) => set({ video }),
+  loadVideoForComparison: (video) =>
+    set({
+      video,
+      // Mirror loadVideo's setup resets so exiting comparison never leaves the
+      // PRIOR video's locked reference frame / points submittable over the new
+      // source clip -- but KEEP loadedSequence (the whole point of this path).
+      startFrame: null,
+      clipStart: null,
+      clipEnd: null,
+      points: [],
+      phase: "idle",
+      error: null,
+      progress: null,
+    }),
 
   loadSequence: (loadedSequence) => set({ loadedSequence }),
 

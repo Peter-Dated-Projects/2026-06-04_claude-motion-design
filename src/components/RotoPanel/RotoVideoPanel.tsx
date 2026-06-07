@@ -177,6 +177,8 @@ function SequencePlayer({
             onPointerDown={onTrackDown}
             onPointerMove={onTrackMove}
             onPointerUp={onTrackUp}
+            onPointerCancel={onTrackUp}
+            onLostPointerCapture={onTrackUp}
             title="Drag to scrub"
           >
             <div className="roto-video__seq-fill" style={{ width: `${pct}%` }} />
@@ -261,6 +263,10 @@ function ClipRangeControl({
   // clip edge. With neither set this is the full width (whole clip selected).
   const regionLeft = clipStart != null ? pct(clipStart) : 0;
   const regionRight = clipEnd != null ? pct(clipEnd) : 100;
+  // Only draw the selected span for a non-inverted range. With clipStart >
+  // clipEnd the width clamps to 0 but both flank masks would still render, an odd
+  // visual -- suppress the region entirely until the bounds form a positive span.
+  const hasValidRegion = regionRight > regionLeft;
 
   const seekFromPointer = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!duration || duration <= 0) return;
@@ -291,17 +297,20 @@ function ClipRangeControl({
         onPointerDown={seekFromPointer}
         title={duration ? "Click to seek" : undefined}
       >
-        {/* Selected span at full brightness (full width until a bound is set). */}
-        <div
-          className="roto-clip__region"
-          style={{ left: `${regionLeft}%`, width: `${Math.max(0, regionRight - regionLeft)}%` }}
-        />
+        {/* Selected span at full brightness (full width until a bound is set).
+            Suppressed when the range is inverted (clipStart > clipEnd). */}
+        {hasValidRegion ? (
+          <div
+            className="roto-clip__region"
+            style={{ left: `${regionLeft}%`, width: `${regionRight - regionLeft}%` }}
+          />
+        ) : null}
         {/* Darkened flanks: the part of the clip outside the selected span. The
             left flank appears once a start is set, the right once an end is. */}
-        {clipStart != null && regionLeft > 0 ? (
+        {hasValidRegion && clipStart != null && regionLeft > 0 ? (
           <div className="roto-clip__mask" style={{ left: 0, width: `${regionLeft}%` }} />
         ) : null}
-        {clipEnd != null && regionRight < 100 ? (
+        {hasValidRegion && clipEnd != null && regionRight < 100 ? (
           <div
             className="roto-clip__mask"
             style={{ left: `${regionRight}%`, width: `${100 - regionRight}%` }}
