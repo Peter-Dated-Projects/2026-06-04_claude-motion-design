@@ -575,6 +575,58 @@ pub fn rename_rotoscope_output(old_dir: String, new_name: String) -> Result<Stri
     Ok(new_path.to_string_lossy().to_string())
 }
 
+// ---------------------------------------------------------------------------
+// delete_rotoscope_output: remove an output folder (frames + video + zip)
+// ---------------------------------------------------------------------------
+
+/// Delete a rotoscope output folder and everything in it.
+///
+/// Path-traversal guard (project-scoped): `dir` is canonicalized, then accepted
+/// ONLY when its parent is the *resolved active project's* `assets` directory
+/// (`project_dir(app, slug)/assets`, canonicalized) AND its own leaf name starts
+/// with `rotoscope_` -- i.e. it is one of the `<project>/assets/rotoscope_*/`
+/// folders this module enumerates for that project, never an arbitrary path. The
+/// `slug` re-derives the project root exactly like the sibling read command
+/// (`list_rotoscope_outputs`) so a hostile/malformed `dir` cannot escape to some
+/// other `*/assets/rotoscope_*` outside the current project. Keeping the
+/// `rotoscope_` leaf check as well is defense in depth. Errors if the directory
+/// does not exist or fails the guard.
+#[tauri::command]
+pub fn delete_rotoscope_output(app: AppHandle, slug: String, dir: String) -> Result<(), String> {
+    let path = Path::new(&dir);
+    if !path.is_dir() {
+        return Err(format!("not a directory: {dir}"));
+    }
+    // Canonicalize so any `.`/`..` segments are resolved before the guard runs.
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("failed to resolve {dir}: {e}"))?;
+
+    // Resolve the project's own assets dir and canonicalize it, so the comparison
+    // is symlink/`..`-stable on both sides.
+    let assets_dir = project_dir(&app, &slug)?.join("assets");
+    let assets_canonical = assets_dir
+        .canonicalize()
+        .map_err(|e| format!("failed to resolve project assets dir: {e}"))?;
+
+    let leaf_ok = canonical
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.starts_with("rotoscope_"))
+        .unwrap_or(false);
+    let parent_ok = canonical
+        .parent()
+        .map(|p| p == assets_canonical)
+        .unwrap_or(false);
+    if !leaf_ok || !parent_ok {
+        return Err(format!(
+            "refusing to delete '{dir}': not a rotoscope output under project '{slug}'s assets directory"
+        ));
+    }
+
+    std::fs::remove_dir_all(&canonical).map_err(|e| format!("delete failed: {e}"))
+}
+
 /// Trim a source video to the half-open range [start_secs, end_secs) into a
 /// throwaway temp file, returning its absolute path. Re-encodes with x264 at a
 /// near-lossless CRF (a stream copy can't cut at an arbitrary, non-keyframe

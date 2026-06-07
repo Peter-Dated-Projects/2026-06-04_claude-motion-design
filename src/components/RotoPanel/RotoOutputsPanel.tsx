@@ -87,6 +87,18 @@ export default function RotoOutputsPanel() {
   // Track the unlisten fn for export://progress so we only register once.
   const exportUnlisten = useRef<(() => void) | null>(null);
 
+  // Per-row "Copied!" feedback for the copy-name button, keyed by folder dir.
+  const [copied, setCopied] = useState<Record<string, boolean>>({});
+  // Which row is showing the delete-confirmation prompt, keyed by folder dir.
+  const [confirmingDelete, setConfirmingDelete] = useState<Record<string, boolean>>(
+    {},
+  );
+  // Per-row delete error (shown inline when the backend rejects the delete).
+  const [deleteError, setDeleteError] = useState<Record<string, string | null>>({});
+
+  const loadedSequenceDir = useRotoStore((s) => s.loadedSequence?.dir ?? null);
+  const clearSequence = useRotoStore((s) => s.clearSequence);
+
   const refresh = useCallback(async () => {
     if (!slug) {
       setOutputs([]);
@@ -136,16 +148,18 @@ export default function RotoOutputsPanel() {
     [loadSequence],
   );
 
-  // Compare this output against the exact clip that was processed: load the
-  // output sequence AND the archived source clip from the output folder, then
-  // ask the Video pane to enter comparison mode. The sequence + source-clip
-  // load is an atomic pair (see loadVideoForComparison's caller contract) -- it
-  // is the comparison source, NOT whatever the user currently has in the setup
-  // pane. Only callable when source_clip.mp4 exists (button gated on that).
+  // Compare this output against its source. Preferred source is the archived
+  // source_clip.mp4 from the output folder (the exact processed clip); when that
+  // is absent we fall back to o.source (the full original video from meta.json) --
+  // the comparison is then against the whole source rather than the trimmed clip,
+  // but it is better than nothing. The output sequence + comparison source load
+  // is an atomic pair (see loadVideoForComparison's caller contract) -- it is the
+  // comparison source, NOT whatever the user currently has in the setup pane. The
+  // button is gated on at least one of those sources existing.
   const compareOutput = useCallback(
     (output: RotoOutput) => {
-      const sourceClip = files[output.dir]?.sourceClip;
-      if (!sourceClip || output.frames.length === 0) return;
+      const compareSource = files[output.dir]?.sourceClip ?? output.source;
+      if (!compareSource || output.frames.length === 0) return;
       loadSequence({
         name: output.name,
         dir: output.dir,
@@ -153,12 +167,41 @@ export default function RotoOutputsPanel() {
         fps: effectiveFps(output.frameSkip, output.sourceFps),
       });
       loadVideoForComparison({
-        path: sourceClip,
+        path: compareSource,
         ...(output.sourceFps != null ? { fps: output.sourceFps } : {}),
       });
       requestComparison();
     },
     [files, loadSequence, loadVideoForComparison, requestComparison],
+  );
+
+  // Delete an output folder (frames + video + zip) after the row's inline
+  // confirmation. On success, patch local state instead of a full refresh: drop
+  // the row from `outputs` and its entry from `files`, and clear the loaded
+  // sequence if the Video pane is currently playing the now-deleted folder.
+  const deleteOutput = useCallback(
+    async (o: RotoOutput) => {
+      setDeleteError((prev) => ({ ...prev, [o.dir]: null }));
+      if (!slug) {
+        setDeleteError((prev) => ({ ...prev, [o.dir]: "no active project" }));
+        return;
+      }
+      try {
+        await invoke("delete_rotoscope_output", { slug, dir: o.dir });
+        if (loadedSequenceDir === o.dir) clearSequence();
+        setOutputs((prev) => prev.filter((item) => item.dir !== o.dir));
+        setFiles((prev) => {
+          if (!(o.dir in prev)) return prev;
+          const next = { ...prev };
+          delete next[o.dir];
+          return next;
+        });
+        setConfirmingDelete((prev) => ({ ...prev, [o.dir]: false }));
+      } catch (err) {
+        setDeleteError((prev) => ({ ...prev, [o.dir]: String(err) }));
+      }
+    },
+    [slug, loadedSequenceDir, clearSequence],
   );
 
   // Open a file/folder with the OS default handler. stopPropagation in the
@@ -342,7 +385,41 @@ export default function RotoOutputsPanel() {
                 <span className="roto-outputs__frames">
                   {o.frameCount} {o.frameCount === 1 ? "frame" : "frames"}
                 </span>
+                {o.source ? (
+                  <span className="roto-outputs__source-line" title={o.source}>
+                    {"source: "}
+                    <span className="roto-outputs__source">
+                      {o.source.split(/[/\\]/).pop() ?? o.source}
+                    </span>
+                  </span>
+                ) : null}
               </div>
+              <button
+                type="button"
+                className="roto-outputs__rename-btn"
+                title="Copy name"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void navigator.clipboard
+                    .writeText(o.name)
+                    .then(() => {
+                      setCopied((prev) => ({ ...prev, [o.dir]: true }));
+                      setTimeout(
+                        () => setCopied((prev) => ({ ...prev, [o.dir]: false })),
+                        500,
+                      );
+                    })
+                    .catch((err) => {
+                      // Clipboard write can reject (permissions / no secure
+                      // context). Surface it and keep the button out of the
+                      // stuck 'Copied!' state.
+                      console.error("copy name failed:", err);
+                      setCopied((prev) => ({ ...prev, [o.dir]: false }));
+                    });
+                }}
+              >
+                {copied[o.dir] ? "Copied!" : "Copy"}
+              </button>
               <button
                 type="button"
                 className="roto-outputs__rename-btn"
@@ -354,6 +431,45 @@ export default function RotoOutputsPanel() {
               >
                 Edit
               </button>
+              {confirmingDelete[o.dir] ? (
+                <div
+                  className="roto-outputs__confirm"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <span className="roto-outputs__confirm-msg">
+                    Delete? This removes all frames, the video, and the zip.
+                  </span>
+                  <button
+                    type="button"
+                    className="roto-outputs__btn roto-outputs__btn--danger"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void deleteOutput(o);
+                    }}
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    className="roto-outputs__btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setConfirmingDelete((prev) => ({ ...prev, [o.dir]: false }));
+                      setDeleteError((prev) => ({ ...prev, [o.dir]: null }));
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  {deleteError[o.dir] ? (
+                    <span
+                      className="roto-outputs__export-err"
+                      title={deleteError[o.dir] ?? ""}
+                    >
+                      !
+                    </span>
+                  ) : null}
+                </div>
+              ) : (
               <div className="roto-outputs__actions">
                 <button
                   type="button"
@@ -366,11 +482,15 @@ export default function RotoOutputsPanel() {
                 >
                   Open folder
                 </button>
-                {files[o.dir]?.sourceClip ? (
+                {files[o.dir]?.sourceClip || o.source ? (
                   <button
                     type="button"
                     className="roto-outputs__btn"
-                    title="Compare against the processed source clip"
+                    title={
+                      files[o.dir]?.sourceClip
+                        ? "Compare against the processed source clip"
+                        : "Compare against the original source video"
+                    }
                     onClick={(e) => {
                       e.stopPropagation();
                       compareOutput(o);
@@ -452,7 +572,20 @@ export default function RotoOutputsPanel() {
                     !
                   </span>
                 ) : null}
+                <button
+                  type="button"
+                  className="roto-outputs__btn roto-outputs__btn--danger"
+                  title="Delete output"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeleteError((prev) => ({ ...prev, [o.dir]: null }));
+                    setConfirmingDelete((prev) => ({ ...prev, [o.dir]: true }));
+                  }}
+                >
+                  Delete
+                </button>
               </div>
+              )}
             </li>
           ))}
         </ul>
@@ -587,6 +720,40 @@ const STYLES = `
 .roto-outputs__frames {
   color: var(--text-faint);
   font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.roto-outputs__source-line {
+  /* Own line below the frame count so the basename isn't eaten by the
+     frames-row ellipsis; still truncates on its own if the path is long. */
+  color: var(--text-faint);
+  font-size: 10px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.roto-outputs__source {
+  color: var(--text-muted);
+}
+.roto-outputs__btn--danger {
+  color: #fca5a5;
+}
+.roto-outputs__btn--danger:hover {
+  color: #fff;
+  background: #b91c1c;
+  border-color: #b91c1c;
+}
+.roto-outputs__confirm {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.roto-outputs__confirm-msg {
+  font-size: 10px;
+  color: var(--text-muted);
 }
 .roto-outputs__format-picker {
   display: flex;
