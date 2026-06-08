@@ -18,21 +18,17 @@ animate it as-is; do not silently rework it.
 ----------------------------------------------------------------
 1. INTENT -> PRESET (pick before you animate)
 ----------------------------------------------------------------
-Decide the emotion + personality archetype, then map to a spring:
-  Playful   : ease-out-back, 10-20% overshoot, 200-400ms entrances
-  Premium   : smooth settle, 0% overshoot, long holds, 500-800ms
-  Corporate : measured ease-in-out, minimal overshoot
-  Energetic : snappy, high stiffness, fast stagger
-Spring default: { mass: 1, damping: 12, stiffness: 100 }. Premium: raise damping
-(no overshoot). Energetic: raise stiffness, lower damping.
+Decide the emotion + personality archetype, then map to a named preset:
+  Playful   : emphasis-pop + quick-tick; 10-20% overshoot ok
+  Premium   : smooth-settle only; 0% overshoot, long holds
+  Corporate : snappy-entrance; 0-3% overshoot max
+  Energetic : snappy-entrance + heavy-drop; high stiffness, fast stagger
 
 ----------------------------------------------------------------
 2. NAMED SPRING PRESETS
 ----------------------------------------------------------------
-  SNAPPY     : { mass: 0.6, damping: 14, stiffness: 180 }  fast, slight settle
-  SMOOTH     : { mass: 1,   damping: 26, stiffness: 120 }  no overshoot, premium
-  BOUNCY     : { mass: 1,   damping: 9,  stiffness: 140 }  visible overshoot
-  GENTLE     : { mass: 1.2, damping: 20, stiffness: 80  }  slow, calm
+Use the named presets from the main skills file: snappy-entrance, smooth-settle,
+emphasis-pop, heavy-drop, quick-tick. Do not define new spring configs.
 
 ----------------------------------------------------------------
 3. DISNEY PRINCIPLES (Remotion numbers)

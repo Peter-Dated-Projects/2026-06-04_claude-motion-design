@@ -156,7 +156,10 @@ pub struct AssetFile {
 /// Names excluded from the source tree: project metadata, the (vestigial)
 /// conversation log, the media folder, and a future per-project chats folder.
 /// Everything else under the project dir is treated as editable source.
-const NON_SOURCE: [&str; 4] = ["project.json", "conversation.json", "assets", "chats"];
+///
+/// Public so `claude_bridge` can assert (in `context_non_source_matches_collect_files`)
+/// that its parallel `CONTEXT_NON_SOURCE` exclusion list stays in sync with this one.
+pub const NON_SOURCE: [&str; 4] = ["project.json", "conversation.json", "assets", "chats"];
 
 // --- scaffolded design-token files ------------------------------------------
 
