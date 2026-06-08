@@ -44,5 +44,10 @@ WHAT TO FOCUS ON
 ----------------------------------------------------------------
 SELF-CHECK (run before you consider the layout pass done)
 ----------------------------------------------------------------
-Does animation.tsx contain zero animation imports or calls
-(useCurrentFrame, spring, interpolate, Easing)? If not, remove them.
+[ ] animation.tsx contains zero animation imports or calls (useCurrentFrame, spring, interpolate, Easing)?
+[ ] All text and key visuals inside the safe zone (x 80-920, y 200-1500)?
+[ ] Exactly one palette (P1-P6) used; no colors invented outside its named roles?
+[ ] One clear hero element (the largest/boldest); at most two font sizes doing the hierarchy work?
+[ ] Every element has an explicit absolute position (left/top or transform: translate) so the
+    motion pass can animate INTO these positions?
+[ ] No background that changes per-frame (no frame-dependent gradient); the base is static?
