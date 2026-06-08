@@ -4,53 +4,32 @@ IMAGE REFERENCE MODE
 When the user provides an image (screenshot, brand asset, design mockup, photo), use this workflow to recreate its visual look as Remotion CSS/SVG/React code. The sandbox only permits CSS gradients, inline SVG in JSX, web-safe system fonts, and react/remotion primitives -- no img tags, no staticFile, no canvas, no external fonts. The goal is not pixel-perfect reconstruction but faithful visual impression through what the sandbox permits.
 
 ----------------------------------------------------------------
+FALLBACK TABLE -- what can and cannot be recreated
+----------------------------------------------------------------
+Check this table first; if your input type is "No", skip directly to the gradient-field approach in Step 2.
+
+  Flat geometric logo         : Yes -- inline SVG primitives
+  Wordmark / typographic logo : Yes -- system font + exact brand hex
+  Abstract gradient background: Yes -- CSS multi-stop gradients
+  UI card / screenshot layout : Yes -- div rectangles + box-shadow
+  Simple icon / pictogram     : Partial -- SVG paths for simple shapes; use Unicode glyph as fallback
+  Illustration / line art     : Partial -- simplify to 3-5 dominant shapes
+  Photograph (people/scene)   : No -- replace with dominant-color gradient field
+  Complex texture             : No -- flat fill in dominant tone
+  Photorealistic 3D render    : No -- abstract geometric composition with extracted palette
+  Custom brand font           : No -- closest-weight system font + weight/tracking compensation
+  Animated GIF / video frame  : No -- extract one keyframe, apply gradient method
+
+----------------------------------------------------------------
 STEP 1 -- Extract a structured scene description from the image
 ----------------------------------------------------------------
-Analyze the image and produce a structured description before writing any code. Use this format internally (do not paste it into chat unless the user asks):
+Before writing any code, describe the image in 2-3 sentences. This analysis is shown in chat (visible output guarantees the step actually happens). Cover:
 
-{
-  "background": {
-    "type": "solid | linear-gradient | radial-gradient | multi-layer",
-    "colors": ["#hex1", "#hex2"],
-    "direction": "to bottom | to right | radial center | ...",
-    "description": "one sentence"
-  },
-  "palette": {
-    "dominant": "#hex",
-    "secondary": "#hex",
-    "accent": "#hex",
-    "text": "#hex"
-  },
-  "layers": [
-    {
-      "id": "element-name",
-      "type": "rect | ellipse | path | text | icon | image-region",
-      "description": "semantic role of this element",
-      "position": { "cx": 0.5, "cy": 0.5 },   // fraction of canvas: 0.0=left/top, 1.0=right/bottom
-      "size":     { "w": 0.4, "h": 0.1 },       // fraction of canvas width/height
-      "fill": "#hex",
-      "stroke": "#hex or null",
-      "opacity": 1.0,
-      "z": 1,
-      "notes": "border-radius, gradient direction, shape detail"
-    }
-  ],
-  "typography": [
-    {
-      "content": "verbatim text",
-      "role": "headline | subhead | body | caption | label",
-      "size_class": "display | large | medium | small",
-      "weight": "400 | 600 | 700 | 800 | 900",
-      "color": "#hex",
-      "alignment": "center | left | right",
-      "position": { "cx": 0.5, "cy": 0.3 }
-    }
-  ],
-  "mood": "one-sentence visual impression",
-  "recreation_strategy": "which abstraction to use (flat geometry, gradient fields, SVG paths, etc.)"
-}
+  (1) Background type and dominant colors -- solid, linear-gradient, radial-gradient, or multi-layer, with hex approximations.
+  (2) The main visual elements and their approximate canvas positions, in absolute pixels on the fixed 1080x1920 canvas (e.g. "logo centered near 540, 600; card spanning roughly 120-960 wide"). Note each element's semantic role, fill, and any shape detail (border-radius, stroke, gradient direction).
+  (3) Any text content (verbatim), its hierarchy (headline / subhead / body / caption), weight class, and color.
 
-Map extracted positions to canvas px: cx * 1080 = x center, cy * 1920 = y center.
+The canvas is fixed at 1080x1920, so describe every position and size directly in pixels -- cx_px / cy_px for centers, w_px / h_px for sizes. Do not use fractional coordinates; there is no conversion step. This lightweight analysis is enough to anchor the recreation; you do not need a verbose structured schema.
 
 ----------------------------------------------------------------
 STEP 2 -- Map each layer to its CSS/SVG equivalent
@@ -74,11 +53,14 @@ Use inline SVG for geometric logos (circles, arcs, polygons, paths):
 For wordmarks: closest-weight system font (#2 Bold Impact for heavy sans, #4 Editorial Serif for premium) + exact brand hex.
 
 UI SCREENSHOT / CARD LAYOUT
-Map each rect layer to an absolutely-positioned <div>. Convert fractional positions to px:
-  const cardX = layer.position.cx * 1080 - (layer.size.w * 1080) / 2;
-  const cardY = layer.position.cy * 1920 - (layer.size.h * 1920) / 2;
-  const cardW = layer.size.w * 1080;
-  const cardH = layer.size.h * 1920;
+Map each rect layer to an absolutely-positioned <div>. Positions are already in px (cx_px / cy_px centers, w_px / h_px sizes), so no conversion is needed:
+  style={{
+    position: 'absolute',
+    left: layer.cx_px - layer.w_px / 2,
+    top:  layer.cy_px - layer.h_px / 2,
+    width: layer.w_px,
+    height: layer.h_px,
+  }}
 Apply border-radius, box-shadow, and text overlays from the extracted description.
 
 GRADIENT / ABSTRACT BACKGROUND
@@ -86,7 +68,7 @@ Directly translate multi-stop gradients; extract color stops and positions:
   background: `linear-gradient(to bottom, #hex1 0%, #hex2 60%, #hex3 100%)`
 
 BRANDED SLIDE / PRESENTATION FRAME
-Override the active palette P object with extracted brand hex codes. Use the design token structure from remotion-skills.txt Section 5 (Color Palettes).
+Override the active palette P object with extracted brand hex codes. Use the design token structure from remotion-skills.txt Section 5 (Color Palettes). Map brand colors to roles: darkest dominant region -> bg; lightest region (if used as a ground) -> surface; primary text color -> ink; secondary text -> muted; most visually distinctive brand color -> accent. If the brand is light-on-dark, pick P1/P2/P3 as the base; if dark-on-light, pick P4/P5.
 
 ----------------------------------------------------------------
 STEP 3 -- Animate the recreated composition
@@ -101,18 +83,3 @@ After mapping the visual, apply the standard motion system from remotion-skills.
 STEP 4 -- Iterate with targeted corrections
 ----------------------------------------------------------------
 After writing the file, summarize what abstractions were used (e.g. "replaced photo with warm-to-dark gradient; logo recreated as two SVG arcs"). The user can then request specific corrections ("make the gradient more blue", "thicken the logo stroke") which map cleanly to the structured description.
-
-----------------------------------------------------------------
-FALLBACK TABLE -- what can and cannot be recreated
-----------------------------------------------------------------
-  Flat geometric logo         : Yes -- inline SVG primitives
-  Wordmark / typographic logo : Yes -- system font + exact brand hex
-  Abstract gradient background: Yes -- CSS multi-stop gradients
-  UI card / screenshot layout : Yes -- div rectangles + box-shadow
-  Simple icon / pictogram     : Partial -- SVG paths for simple shapes; use Unicode glyph as fallback
-  Illustration / line art     : Partial -- simplify to 3-5 dominant shapes
-  Photograph (people/scene)   : No -- replace with dominant-color gradient field
-  Complex texture             : No -- flat fill in dominant tone
-  Photorealistic 3D render    : No -- abstract geometric composition with extracted palette
-  Custom brand font           : No -- closest-weight system font + weight/tracking compensation
-  Animated GIF / video frame  : No -- extract one keyframe, apply gradient method
