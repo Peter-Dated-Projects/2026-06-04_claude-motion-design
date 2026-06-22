@@ -45,6 +45,13 @@ export interface LoadedSequence {
   urls: string[];
   /** Effective playback fps (source fps / (frameSkip + 1)). */
   fps: number;
+  /**
+   * asset:// url of the composed output video (`output.webm`) when the folder
+   * has one. Comparison plays this as a real <video> (smooth, decoded
+   * off-thread) instead of swapping the PNG `urls` frame-by-frame in JS; the
+   * PNG sequence remains the fallback for older outputs that lack the webm.
+   */
+  videoUrl?: string;
 }
 
 /** Proposal default: process every 4th frame (skip=3 -> ~7.5fps at 30fps source). */
