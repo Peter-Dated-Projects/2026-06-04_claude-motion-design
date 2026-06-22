@@ -2,6 +2,7 @@ import {
   useRef,
   useState,
   useEffect,
+  useMemo,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type { LoadedSequence } from "../../store/rotoStore";
@@ -23,14 +24,26 @@ function fmtTime(s: number): string {
   return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
+/** Resync the output video to the master clock only past this drift (seconds).
+ * Both clips span the same duration, so they free-run together once started;
+ * nudging every frame would seek-stall the output and reintroduce stutter. */
+const DRIFT_TOLERANCE = 0.15;
+
 /**
- * Comparison split + shared timeline. Owns the source video element and the
- * rAF-driven sync loop so that both halves always show the same instant.
+ * Comparison split + shared timeline. The SOURCE video (source_clip.mp4) is the
+ * master clock.
  *
- * rAF is the sole clock — no setInterval. Each tick reads video.currentTime,
- * derives the sequence frame as round(t * fps / (frameSkip + 1)), and schedules
- * the next tick. Seeking pauses the loop, seeks the video, derives the frame
- * immediately, then resumes if playback was active.
+ * When the output folder has a composed `output.webm` (`sequence.videoUrl`), the
+ * output half is a real <video> decoded off the main thread and slaved to the
+ * master on drift — smooth playback at the output's true fps, no per-frame work.
+ * Older outputs without a webm fall back to swapping the PNG `sequence.urls`
+ * frame-by-frame, derived from the shared clock. Either way both halves stay
+ * time-aligned: the rotoscoped output is genuinely fps/(frameSkip+1) and spans
+ * the same wall-clock as the source clip.
+ *
+ * A single rAF loop advances the scrubber off the master's currentTime and, for
+ * the video path, applies the drift correction. Seeking pauses the loop, seeks
+ * both videos, then resumes if playback was active.
  */
 export default function ComparisonPlayer({
   videoUrl,
@@ -41,6 +54,7 @@ export default function ComparisonPlayer({
   layout,
 }: ComparisonPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const outVideoRef = useRef<HTMLVideoElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const wasPlayingRef = useRef(false);
@@ -48,23 +62,36 @@ export default function ComparisonPlayer({
   const [sharedTime, setSharedTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [scrubbing, setScrubbing] = useState(false);
-  const [comparisonFrame, setComparisonFrame] = useState(0);
 
   const count = sequence.urls.length;
+  const outputVideoUrl = sequence.videoUrl;
+  const hasOutputVideo = Boolean(outputVideoUrl);
 
+  // Output frame index for the readout (and the PNG-fallback image), derived
+  // from the shared clock. The output advances at fps/(frameSkip+1) of source.
   const deriveFrame = (t: number) =>
     Math.min(count - 1, Math.max(0, Math.round((t * fps) / (frameSkip + 1))));
+  const displayFrame = deriveFrame(sharedTime);
 
-  // rAF loop — active only while playing and not scrubbing.
+  const syncOutputVideo = (t: number) => {
+    const out = outVideoRef.current;
+    if (out && Math.abs(out.currentTime - t) > DRIFT_TOLERANCE) {
+      out.currentTime = t;
+    }
+  };
+
+  // rAF loop — active only while playing and not scrubbing. Reads the master
+  // (source) clock to drive the scrubber, and nudges the output video back into
+  // alignment when it drifts. No per-frame PNG swapping on the video path.
   useEffect(() => {
     if (!playing || scrubbing) return;
     const tick = () => {
       const vid = videoRef.current;
       if (vid) {
-        const t = vid.currentTime;
-        setSharedTime(t);
-        setComparisonFrame(deriveFrame(t));
+        setSharedTime(vid.currentTime);
+        if (hasOutputVideo) syncOutputVideo(vid.currentTime);
         if (vid.ended) {
+          outVideoRef.current?.pause();
           setPlaying(false);
           return;
         }
@@ -75,15 +102,7 @@ export default function ComparisonPlayer({
     return () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     };
-  }, [playing, scrubbing, fps, frameSkip, count]);
-
-  const applySeek = (t: number) => {
-    const clamped = Math.min(Math.max(0, t), Math.max(0, effectiveDuration));
-    const vid = videoRef.current;
-    if (vid) vid.currentTime = clamped;
-    setSharedTime(clamped);
-    setComparisonFrame(deriveFrame(clamped));
-  };
+  }, [playing, scrubbing, fps, frameSkip, count, hasOutputVideo]);
 
   const cancelRaf = () => {
     if (rafRef.current != null) {
@@ -92,15 +111,32 @@ export default function ComparisonPlayer({
     }
   };
 
+  const pauseBoth = () => {
+    videoRef.current?.pause();
+    outVideoRef.current?.pause();
+  };
+
+  const playBoth = () => {
+    void videoRef.current?.play();
+    void outVideoRef.current?.play();
+  };
+
+  const applySeek = (t: number) => {
+    const clamped = Math.min(Math.max(0, t), Math.max(0, effectiveDuration));
+    if (videoRef.current) videoRef.current.currentTime = clamped;
+    if (outVideoRef.current) outVideoRef.current.currentTime = clamped;
+    setSharedTime(clamped);
+  };
+
   const togglePlay = () => {
     const vid = videoRef.current;
     if (!vid) return;
     if (playing) {
-      vid.pause();
+      pauseBoth();
       cancelRaf();
       setPlaying(false);
     } else {
-      void vid.play();
+      playBoth();
       setPlaying(true);
     }
   };
@@ -117,7 +153,7 @@ export default function ComparisonPlayer({
     e.currentTarget.setPointerCapture(e.pointerId);
     wasPlayingRef.current = playing;
     if (playing) {
-      videoRef.current?.pause();
+      pauseBoth();
       cancelRaf();
       setPlaying(false);
     }
@@ -133,7 +169,7 @@ export default function ComparisonPlayer({
   const onTrackPointerUp = () => {
     setScrubbing(false);
     if (wasPlayingRef.current) {
-      void videoRef.current?.play();
+      playBoth();
       setPlaying(true);
     }
   };
@@ -142,6 +178,22 @@ export default function ComparisonPlayer({
     effectiveDuration > 0
       ? Math.min(100, (sharedTime / effectiveDuration) * 100)
       : 0;
+
+  // PNG fallback only (older outputs with no output.webm). Hidden preload of
+  // every frame so the swap loop is flicker-free; memoized on the url list so a
+  // scrubber re-render never re-reconciles the whole <img> list. Skipped
+  // entirely when the output video is available.
+  const preloadStrip = useMemo(
+    () =>
+      hasOutputVideo ? null : (
+        <div className="roto-video__seq-preload" aria-hidden>
+          {sequence.urls.map((u) => (
+            <img key={u} src={u} alt="" />
+          ))}
+        </div>
+      ),
+    [hasOutputVideo, sequence.urls],
+  );
 
   return (
     <div className="roto-cmp">
@@ -158,21 +210,24 @@ export default function ComparisonPlayer({
           <span className="roto-compare__tag">Source</span>
         </div>
         <div className="roto-compare__half roto-compare__half--seq">
-          {sequence.urls[comparisonFrame] ? (
+          {hasOutputVideo ? (
+            <video
+              ref={outVideoRef}
+              className="roto-compare__vid"
+              src={outputVideoUrl}
+              muted
+              playsInline
+            />
+          ) : sequence.urls[displayFrame] ? (
             <img
               className="roto-compare__img"
-              src={sequence.urls[comparisonFrame]}
+              src={sequence.urls[displayFrame]}
               alt="rotoscoped frame"
               draggable={false}
             />
           ) : null}
           <span className="roto-compare__tag">Output</span>
-          {/* Hidden preload strip so first-pass loop is flicker-free. */}
-          <div className="roto-video__seq-preload" aria-hidden>
-            {sequence.urls.map((u) => (
-              <img key={u} src={u} alt="" />
-            ))}
-          </div>
+          {preloadStrip}
         </div>
       </div>
 
@@ -203,7 +258,7 @@ export default function ComparisonPlayer({
           {fmtTime(sharedTime)} / {fmtTime(effectiveDuration)}
         </span>
         <span className="roto-cmp__frames">
-          f&nbsp;{comparisonFrame + 1}&nbsp;/&nbsp;{count}
+          f&nbsp;{displayFrame + 1}&nbsp;/&nbsp;{count}
         </span>
       </div>
     </div>

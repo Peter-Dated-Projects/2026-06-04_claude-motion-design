@@ -708,33 +708,61 @@ fn rotoscope_blocking(
 /// before giving up. Any other non-2xx is surfaced with the service's body.
 fn fetch_result_zip(host: &str, job_id: &str) -> Result<Vec<u8>, String> {
     let client = reqwest::blocking::Client::builder()
+        // Fail fast on a dead host (so a retry can fire) but allow a generous
+        // overall budget: the result.zip bundles the PNG sequence plus the
+        // composed output.webm + source_clip.mp4, which can be tens of MB.
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(300))
         .build()
         .map_err(|e| format!("http client init failed: {e}"))?;
     let url = format!("http://{host}:{PORT}/rotoscope/{job_id}/result");
 
     const MAX_ATTEMPTS: u32 = 10;
+    let mut last_err = "rotoscope result never became ready".to_string();
     for attempt in 0..MAX_ATTEMPTS {
-        let resp = client
-            .get(&url)
-            .send()
-            .map_err(|e| format!("result request failed: {e}"))?;
+        let is_last = attempt + 1 >= MAX_ATTEMPTS;
+        let resp = match client.get(&url).send() {
+            Ok(r) => r,
+            // Transient connect/send failure (service still spinning up the
+            // result, momentary reset): retry before surfacing it.
+            Err(e) => {
+                last_err = format!("result request failed: {e}");
+                if is_last {
+                    return Err(last_err);
+                }
+                std::thread::sleep(Duration::from_millis(300));
+                continue;
+            }
+        };
         let status = resp.status();
         if status.is_success() {
-            return resp
-                .bytes()
-                .map(|b| b.to_vec())
-                .map_err(|e| format!("failed to read rotoscope result: {e}"));
+            match resp.bytes() {
+                Ok(b) => return Ok(b.to_vec()),
+                // A 2xx whose body was cut short ("error decoding response body"
+                // = incomplete message): the /result stream can race the
+                // server's work_dir reap, truncating the zip. Retry the whole
+                // GET; if the artifact has since been reaped the next attempt
+                // returns a non-2xx, handled below.
+                Err(e) => {
+                    last_err = format!("failed to read rotoscope result: {e}");
+                    if is_last {
+                        return Err(last_err);
+                    }
+                    std::thread::sleep(Duration::from_millis(300));
+                    continue;
+                }
+            }
         }
         let retryable =
             status == reqwest::StatusCode::TOO_EARLY || status == reqwest::StatusCode::CONFLICT;
-        if retryable && attempt + 1 < MAX_ATTEMPTS {
+        if retryable && !is_last {
             std::thread::sleep(Duration::from_millis(300));
             continue;
         }
         let msg = resp.text().unwrap_or_default();
         return Err(format!("rotoscope result fetch returned {status}: {msg}"));
     }
-    Err("rotoscope result never became ready".to_string())
+    Err(last_err)
 }
 
 /// Extract the rotoscope output ZIP into `dest` (flattened to each entry's base

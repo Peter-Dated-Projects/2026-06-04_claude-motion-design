@@ -93,7 +93,7 @@ impl FileWatcher {
             .lock()
             .map_err(|_| "file watcher lock poisoned".to_string())? = Some(watcher);
 
-        std::thread::spawn(move || debounce_loop(app, project_dir, rx));
+        std::thread::spawn(move || debounce_loop(app, slug, project_dir, rx));
 
         Ok(())
     }
@@ -102,7 +102,12 @@ impl FileWatcher {
 /// Block for an event, drain the debounce window collecting the set of changed
 /// paths, then emit them as ONE event. Exits when the channel disconnects
 /// (watcher dropped on supersede).
-fn debounce_loop(app: AppHandle, project_dir: PathBuf, rx: std::sync::mpsc::Receiver<PathBuf>) {
+fn debounce_loop(
+    app: AppHandle,
+    slug: String,
+    project_dir: PathBuf,
+    rx: std::sync::mpsc::Receiver<PathBuf>,
+) {
     loop {
         // Wait for the first change.
         let first = match rx.recv() {
@@ -125,6 +130,16 @@ fn debounce_loop(app: AppHandle, project_dir: PathBuf, rx: std::sync::mpsc::Rece
             }
         }
         emit_changed(&app, &project_dir, &changed);
+
+        // Refresh the per-session project context so files created or deleted
+        // mid-session appear in (or drop from) the listing the CLI reads, and so
+        // the embedded `animation.tsx` contents stay current — otherwise the
+        // PREFER-EXISTING rule would tell the model a freshly created component
+        // doesn't exist. `write_project_context` writes through `write_if_changed`,
+        // so a burst that didn't change the source set or the entry point is a
+        // no-op and won't churn the CLI's prompt cache. No feedback loop: the file
+        // lives in the app-data claude-config dir, NOT this watched project dir.
+        let _ = claude_bridge::write_project_context(&app, &slug);
     }
 }
 

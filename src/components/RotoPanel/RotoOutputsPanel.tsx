@@ -181,11 +181,13 @@ export default function RotoOutputsPanel() {
     (output: RotoOutput) => {
       const compareSource = files[output.dir]?.sourceClip ?? output.source;
       if (!compareSource || output.frames.length === 0) return;
+      const outputVideo = files[output.dir]?.video;
       loadSequence({
         name: output.name,
         dir: output.dir,
         urls: output.frames.map((p) => convertFileSrc(p)),
         fps: effectiveFps(output.frameSkip, output.sourceFps),
+        ...(outputVideo ? { videoUrl: convertFileSrc(outputVideo) } : {}),
       });
       loadVideoForComparison({
         path: compareSource,
